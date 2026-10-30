@@ -141,6 +141,7 @@ header() {
 
     printf '\n'
     line
+    printf '\n'
 }
 
 # -------------------- SPINNER --------------------------------
@@ -662,6 +663,8 @@ show_summary() {
 
 main() {
     local verification_status=0
+    local message
+    local width=58
 
     # Desactivar job control para evitar mensajes de trabajos.
     set +m 2>/dev/null || true
@@ -706,9 +709,8 @@ main() {
         exit 0
     fi
 
-    printf '\n'
-    line
-
+    # No imprimir otra línea divisoria aquí.
+    # El encabezado ya dejó la separación visual correspondiente.
     section "COMPONENTES DETECTADOS"
 
     if (( ${#FOUND_SERVICES[@]} > 0 )); then
@@ -727,7 +729,19 @@ main() {
 
     if ! confirm_uninstall; then
         printf '\n'
-        warning "Desinstalación cancelada."
+        line
+        printf '\n'
+
+        message="DESINSTALACIÓN CANCELADA"
+
+        printf '%*s%b%s%b\n' \
+            "$(( (width - ${#message}) / 2 ))" '' \
+            "$RED$BOLD" "$message" "$RESET"
+
+        printf '\n'
+        line
+        printf '\n'
+
         exit 0
     fi
 
@@ -793,8 +807,7 @@ main() {
     line
     printf '\n'
 
-    local message="DESINSTALACIÓN COMPLETADA"
-    local width=58
+    message="DESINSTALACIÓN COMPLETADA"
 
     printf '%*s%b%s%b\n' \
         "$(( (width - ${#message}) / 2 ))" '' \
