@@ -14,7 +14,12 @@ umask 077
 #   - Transporte PLAIN (sin TLS).
 #   - Configuración explícita de parámetros del binario.
 #   - Validación de puertos y conflictos.
+#   - Comprobación real de puertos TCP en escucha.
+#   - Verificación mediante ss y /proc/net/tcp.
+#   - Espera del listener después del inicio.
+#   - Resumen detallado de estados y totales.
 #   - Spinner animado de seis puntos.
+#   - Interfaz visual moderna con estados por color.
 #   - Consultas reciclables sin duplicar líneas.
 #
 # ============================================================
@@ -44,6 +49,10 @@ DOWNLOAD_POLL_TIMEOUT="25s"
 DIAGNOSTICS_INTERVAL=0
 SESSION_STATS_INTERVAL=0
 
+# Tiempo máximo para esperar el listener después del inicio.
+PORT_CHECK_ATTEMPTS=20
+PORT_CHECK_INTERVAL=0.25
+
 # -------------------- COLORES -------------------------------
 
 if [[ -t 1 ]]; then
@@ -59,10 +68,14 @@ if [[ -t 1 ]]; then
     CYAN='\033[1;36m'
     WHITE='\033[1;37m'
     GRAY='\033[0;37m'
+
+    BG_BLUE='\033[44m'
+    BG_CYAN='\033[46m'
 else
     RESET=''
     BOLD=''
     DIM=''
+
     RED=''
     GREEN=''
     YELLOW=''
@@ -71,33 +84,36 @@ else
     CYAN=''
     WHITE=''
     GRAY=''
+
+    BG_BLUE=''
+    BG_CYAN=''
 fi
 
 # -------------------- FUNCIONES VISUALES --------------------
 
 line() {
-    printf '%b\n' "${DIM}────────────────────────────────────────────────────────${RESET}"
+    printf '%b\n' "${DIM}${BLUE}────────────────────────────────────────────────────────${RESET}"
 }
 
 success() {
-    printf '  %b✓%b  %b\n' "$GREEN" "$RESET" "$1"
+    printf '  %b✓%b  %b%s%b\n' "$GREEN" "$RESET" "$WHITE" "$1" "$RESET"
 }
 
 error() {
-    printf '  %b✗%b  %b\n' "$RED" "$RESET" "$1"
+    printf '  %b✗%b  %b%s%b\n' "$RED" "$RESET" "$RED" "$1" "$RESET"
 }
 
 info() {
-    printf '  %b›%b  %b\n' "$CYAN" "$RESET" "$1"
+    printf '  %b›%b  %b%s%b\n' "$CYAN" "$RESET" "$WHITE" "$1" "$RESET"
 }
 
 warning() {
-    printf '  %b!%b  %b%b%b\n' "$YELLOW" "$RESET" "$YELLOW" "$1" "$RESET"
+    printf '  %b!%b  %b%s%b\n' "$YELLOW" "$RESET" "$YELLOW" "$1" "$RESET"
 }
 
 section() {
     printf '\n'
-    printf '  %b%s%b\n' "$BLUE$BOLD" "$1" "$RESET"
+    printf '  %b◆%b  %b%s%b\n' "$CYAN" "$RESET" "$WHITE$BOLD" "$1" "$RESET"
     printf '\n'
 }
 
@@ -114,9 +130,9 @@ header() {
 
     printf '%*s%bHCR%b %bSERVER%b %bEPRO DEV%b\n' \
         "$(( (width - ${#title}) / 2 ))" '' \
-        "$CYAN" "$RESET" \
-        "$WHITE" "$RESET" \
-        "$MAGENTA" "$RESET"
+        "$CYAN$BOLD" "$RESET" \
+        "$WHITE$BOLD" "$RESET" \
+        "$MAGENTA$BOLD" "$RESET"
 
     printf '%*s%b%s%b\n' \
         "$(( (width - ${#subtitle}) / 2 ))" '' \
@@ -125,6 +141,15 @@ header() {
     printf '\n'
     line
     printf '\n'
+
+    printf '  %b●%b  %bVALORES PREDETERMINADOS%b\n' \
+        "$GREEN" "$RESET" "$WHITE$BOLD" "$RESET"
+
+    printf '  %b●%b  %bSCRIPT BY. ChristopherAGT%b\n' \
+        "$YELLOW" "$RESET" "$GRAY" "$RESET"
+
+    printf '\n'
+    line
 }
 
 # -------------------- SPINNER --------------------------------
@@ -138,12 +163,16 @@ spinner() {
     local status=0
     local i=0
 
-    "$@" >/dev/null 2>&1 &
+    (
+        set +m
+        "$@" >/dev/null 2>&1
+    ) &
     pid=$!
 
     while kill -0 "$pid" 2>/dev/null; do
-        printf '\r  %b%s%b  %s' \
-            "$CYAN" "${frames[i]}" "$RESET" "$message"
+        printf '\r\033[2K  %b%s%b  %b%s%b' \
+            "$CYAN$BOLD" "${frames[i]}" "$RESET" \
+            "$WHITE" "$message" "$RESET"
 
         i=$(( (i + 1) % 6 ))
         sleep 0.10
@@ -152,9 +181,11 @@ spinner() {
     wait "$pid" || status=$?
 
     if (( status == 0 )); then
-        printf '\r\033[2K  %b✓%b  %s\n' "$GREEN" "$RESET" "$message"
+        printf '\r\033[2K  %b✓%b  %b%s%b\n' \
+            "$GREEN$BOLD" "$RESET" "$WHITE" "$message" "$RESET"
     else
-        printf '\r\033[2K  %b✗%b  %s\n' "$RED" "$RESET" "$message"
+        printf '\r\033[2K  %b✗%b  %b%s%b\n' \
+            "$RED$BOLD" "$RESET" "$RED" "$message" "$RESET"
     fi
 
     return "$status"
@@ -256,21 +287,119 @@ normalize_ports() {
 
 port_in_use() {
     local port="$1"
+    local listeners
+    local port_hex
 
-    ss -H -lnt 2>/dev/null |
-        awk -v port="$port" '
-        {
-            address=$4
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    (( port >= 1 && port <= 65535 )) || return 1
 
-            if (address ~ (":" port "$")) {
-                found=1
+    # --------------------------------------------------------
+    # 1. COMPROBACIÓN MEDIANTE SS
+    # --------------------------------------------------------
+
+    if command -v ss >/dev/null 2>&1; then
+
+        listeners="$(ss -H -lnt 2>/dev/null || true)"
+
+        if [[ -n "$listeners" ]]; then
+            if awk -v port="$port" '
+                {
+                    address = $4
+
+                    # Extraer el puerto de IPv4, IPv6 o comodín.
+                    sub(/^.*:/, "", address)
+
+                    if (address ~ /^[0-9]+$/ && address == port) {
+                        found = 1
+                        exit
+                    }
+                }
+
+                END {
+                    exit !found
+                }
+            ' <<< "$listeners"; then
+                return 0
+            fi
+        fi
+    fi
+
+    # --------------------------------------------------------
+    # 2. RESPALDO MEDIANTE /proc/net/tcp
+    # --------------------------------------------------------
+
+    printf -v port_hex '%04X' "$port"
+
+    if [[ -r /proc/net/tcp ]]; then
+        if awk -v port_hex="$port_hex" '
+            FNR > 1 {
+                split($2, address, ":")
+
+                local_port = toupper(address[2])
+                state = toupper($4)
+
+                # 0A = TCP_LISTEN.
+                if (local_port == port_hex && state == "0A") {
+                    found = 1
+                    exit
+                }
             }
-        }
 
-        END {
-            exit !found
-        }
-        '
+            END {
+                exit !found
+            }
+        ' /proc/net/tcp; then
+            return 0
+        fi
+    fi
+
+    # --------------------------------------------------------
+    # 3. RESPALDO MEDIANTE /proc/net/tcp6
+    # --------------------------------------------------------
+
+    if [[ -r /proc/net/tcp6 ]]; then
+        if awk -v port_hex="$port_hex" '
+            FNR > 1 {
+                split($2, address, ":")
+
+                local_port = toupper(address[2])
+                state = toupper($4)
+
+                # 0A = TCP_LISTEN.
+                if (local_port == port_hex && state == "0A") {
+                    found = 1
+                    exit
+                }
+            }
+
+            END {
+                exit !found
+            }
+        ' /proc/net/tcp6; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# -------------------- ESPERA DEL LISTENER -------------------
+
+wait_for_port() {
+    local port="$1"
+    local attempt
+
+    for (( attempt=0; attempt<PORT_CHECK_ATTEMPTS; attempt++ )); do
+
+        if port_in_use "$port"; then
+            return 0
+        fi
+
+        sleep "$PORT_CHECK_INTERVAL"
+    done
+
+    # Última comprobación antes de declarar el puerto cerrado.
+    port_in_use "$port"
 }
 
 check_ports() {
@@ -437,13 +566,65 @@ install_services() {
     return 0
 }
 
+# -------------------- RESUMEN DE CONFIGURACIÓN ---------------
+
+show_configuration() {
+    local ssl_tls_status
+
+    if [[ "${TRANSPORT,,}" == "plain" ]]; then
+        ssl_tls_status="CERRADO"
+    else
+        ssl_tls_status="ACTIVO"
+    fi
+
+    printf '\n'
+    line
+    section "RESUMEN DE CONFIGURACIÓN"
+
+    printf '  %b%-28s%b %b%s%b\n' \
+        "$CYAN" "Puertos HCR:" "$RESET" \
+        "$WHITE$BOLD" "${PORTS[*]}" "$RESET"
+
+    printf '  %b%-29s%b %b%s%b\n' \
+        "$CYAN" "Puerto de redirección:" "$RESET" \
+        "$WHITE$BOLD" "$TARGET_PORT" "$RESET"
+
+    if [[ "$ssl_tls_status" == "CERRADO" ]]; then
+        printf '  %b%-28s%b %bCERRADO%b\n' \
+            "$CYAN" "SSL/TLS:" "$RESET" \
+            "$YELLOW$BOLD" "$RESET"
+    else
+        printf '  %b%-28s%b %bABIERTO%b\n' \
+            "$CYAN" "SSL/TLS:" "$RESET" \
+            "$GREEN$BOLD" "$RESET"
+    fi
+
+    printf '\n'
+    line
+    printf '\n'
+}
+
 # -------------------- RESUMEN FINAL -------------------------
 
 show_summary() {
     local port
     local service
-    local message="INSTALACIÓN COMPLETADA"
-    local width=58
+    local active_state
+    local sub_state
+    local result
+    local exit_status
+    local status_text
+    local status_color
+    local listener_open
+
+    local active_count=0
+    local open_count=0
+    local closed_count=0
+    local stopped_count=0
+    local error_count=0
+    local starting_count=0
+
+    local total_count="${#PORTS[@]}"
 
     printf '\n'
     line
@@ -453,22 +634,174 @@ show_summary() {
     for port in "${PORTS[@]}"; do
         service="${SERVICE_PREFIX}-${port}.service"
 
-        if systemctl is-active --quiet "$service"; then
-            printf '  %b●%b  %-34s  %b%-18s%b\n' \
-                "$GREEN" "$RESET" \
-                "$service" \
-                "$GREEN" "En ejecución" "$RESET"
-        else
-            printf '  %b●%b  %-34s  %b%-18s%b\n' \
+        # Consultar el estado real de la unidad en systemd.
+        active_state="$(
+            systemctl show "$service" \
+                --property=ActiveState \
+                --value 2>/dev/null || true
+        )"
+
+        sub_state="$(
+            systemctl show "$service" \
+                --property=SubState \
+                --value 2>/dev/null || true
+        )"
+
+        result="$(
+            systemctl show "$service" \
+                --property=Result \
+                --value 2>/dev/null || true
+        )"
+
+        exit_status="$(
+            systemctl show "$service" \
+                --property=ExecMainStatus \
+                --value 2>/dev/null || true
+        )"
+
+        # ----------------------------------------------------
+        # CLASIFICACIÓN DEL SERVICIO Y SU PUERTO
+        # ----------------------------------------------------
+
+        listener_open=0
+
+        case "$active_state" in
+
+            active)
+                active_count=$((active_count + 1))
+
+                # Esperar brevemente si el proceso todavía está
+                # terminando de inicializar su listener.
+                if wait_for_port "$port"; then
+                    listener_open=1
+                    open_count=$((open_count + 1))
+
+                    status_text="FUNCIONANDO"
+                    status_color="$GREEN"
+                else
+                    closed_count=$((closed_count + 1))
+
+                    status_text="SIN ESCUCHA"
+                    status_color="$YELLOW"
+                fi
+                ;;
+
+            activating)
+                starting_count=$((starting_count + 1))
+
+                status_text="INICIANDO"
+                status_color="$CYAN"
+                ;;
+
+            inactive)
+                stopped_count=$((stopped_count + 1))
+
+                status_text="DETENIDO"
+                status_color="$RED"
+                ;;
+
+            failed)
+                error_count=$((error_count + 1))
+
+                status_text="ERROR"
+                status_color="$RED"
+                ;;
+
+            *)
+                error_count=$((error_count + 1))
+
+                status_text="ERROR"
+                status_color="$RED"
+                ;;
+        esac
+
+        printf '  %b●%b  %b%-34s%b  %b%-20s%b\n' \
+            "$status_color" "$RESET" \
+            "$WHITE" "$service" "$RESET" \
+            "$status_color$BOLD" "$status_text" "$RESET"
+
+        # ----------------------------------------------------
+        # INFORMACIÓN ADICIONAL SEGÚN EL ESTADO
+        # ----------------------------------------------------
+
+        if [[ "$active_state" == "failed" ]]; then
+
+            printf '     %b›%b  Resultado: %s | Código: %s | Subestado: %s\n' \
                 "$RED" "$RESET" \
-                "$service" \
-                "$RED" "Detenido" "$RESET"
+                "${result:-desconocido}" \
+                "${exit_status:-desconocido}" \
+                "${sub_state:-desconocido}"
+
+        elif [[ "$active_state" == "active" ]] && (( listener_open == 0 )); then
+
+            printf '     %b›%b  systemd está activo, pero no se detecta un listener TCP en el puerto %s.\n' \
+                "$YELLOW" "$RESET" "$port"
+
+            printf '     %b›%b  Subestado: %s | Resultado: %s\n' \
+                "$YELLOW" "$RESET" \
+                "${sub_state:-desconocido}" \
+                "${result:-desconocido}"
+
+        elif [[ "$active_state" == "inactive" ]]; then
+
+            printf '     %b›%b  Subestado: %s | Resultado: %s\n' \
+                "$RED" "$RESET" \
+                "${sub_state:-desconocido}" \
+                "${result:-desconocido}"
         fi
     done
+
+    # -------------------- TOTALES DE SERVICIOS ----------------
 
     printf '\n'
     line
     printf '\n'
+
+    printf '  %bTotal de servicios:%b          %b%s%b\n' \
+        "$GRAY" "$RESET" "$WHITE$BOLD" "$total_count" "$RESET"
+
+    printf '  %bServicios activos:%b           %b%s%b\n' \
+        "$GRAY" "$RESET" "$GREEN$BOLD" "$active_count" "$RESET"
+
+    printf '  %bPuertos escuchando:%b          %b%s%b\n' \
+        "$GRAY" "$RESET" "$GREEN$BOLD" "$open_count" "$RESET"
+
+    if (( closed_count > 0 )); then
+        printf '  %bPuertos sin escucha:%b         %b%s%b\n' \
+            "$GRAY" "$RESET" "$YELLOW$BOLD" "$closed_count" "$RESET"
+    fi
+
+    if (( stopped_count > 0 )); then
+        printf '  %bServicios detenidos:%b         %b%s%b\n' \
+            "$GRAY" "$RESET" "$RED$BOLD" "$stopped_count" "$RESET"
+    fi
+
+    if (( error_count > 0 )); then
+        printf '  %bServicios con error:%b         %b%s%b\n' \
+            "$GRAY" "$RESET" "$RED$BOLD" "$error_count" "$RESET"
+    fi
+
+    if (( starting_count > 0 )); then
+        printf '  %bServicios iniciando:%b         %b%s%b\n' \
+            "$GRAY" "$RESET" "$CYAN$BOLD" "$starting_count" "$RESET"
+    fi
+
+    printf '\n'
+
+    if (( closed_count > 0 || stopped_count > 0 || error_count > 0 )); then
+        warning "Se detectaron servicios que requieren atención."
+    elif (( starting_count > 0 )); then
+        warning "Hay servicios que todavía están iniciando."
+    else
+        success "Todos los servicios funcionan correctamente."
+    fi
+
+    printf '\n'
+    line
+    printf '\n'
+
+    local message="INSTALACIÓN COMPLETADA"
+    local width=58
 
     printf '%*s%b%s%b\n' \
         "$(( (width - ${#message}) / 2 ))" '' \
@@ -485,10 +818,10 @@ main() {
     local ports_input
     local target_input
     local prompt
-    local ssl_tls_status
 
     if (( EUID != 0 )); then
-        printf '%bEjecuta el instalador como root.%b\n' "$RED" "$RESET"
+        printf '%b✗%b  %bEjecuta el instalador como root.%b\n' \
+            "$RED" "$RESET" "$WHITE" "$RESET"
         exit 1
     fi
 
@@ -500,8 +833,7 @@ main() {
 
     section "CONFIGURACIÓN"
 
-    # Espaciado manual compacto.
-    prompt="  ${CYAN}Puertos HCR${RESET} ${DIM}[8080]${RESET}: "
+    prompt="  ${CYAN}${BOLD}Puertos HCR${RESET} ${DIM}[8080]${RESET}: "
 
     while true; do
         ask_recyclable "$prompt" "$DEFAULT_PORTS" ports_input || exit 1
@@ -520,8 +852,7 @@ main() {
         break
     done
 
-    # Espaciado manual compacto.
-    prompt="  ${CYAN}Puerto de redirección${RESET} ${DIM}[22]${RESET}: "
+    prompt="  ${CYAN}${BOLD}Puerto de redirección${RESET} ${DIM}[22]${RESET}: "
 
     while true; do
         ask_recyclable "$prompt" "$DEFAULT_TARGET_PORT" target_input || exit 1
@@ -536,29 +867,7 @@ main() {
             "Ingresa un valor válido (1-65535)." || exit 1
     done
 
-    printf '\n'
-    line
-
-    section "RESUMEN DE CONFIGURACIÓN"
-
-    if [[ "${TRANSPORT,,}" == "plain" ]]; then
-        ssl_tls_status="CERRADO"
-    else
-        ssl_tls_status="ACTIVO"
-    fi
-
-    printf '  %-28s %s\n' \
-        "Puertos HCR:" "${PORTS[*]}"
-
-    printf '  %-29s %s\n' \
-        "Puerto de redirección:" "$TARGET_PORT"
-
-    printf '  %-28s %b%s%b\n' \
-        "SSL/TLS:" "$YELLOW$BOLD" "$ssl_tls_status" "$RESET"
-
-    printf '\n'
-    line
-    printf '\n'
+    show_configuration
 
     if ! spinner "Descargando binario HCR" download_binary; then
         error "No se pudo descargar o validar el binario."
