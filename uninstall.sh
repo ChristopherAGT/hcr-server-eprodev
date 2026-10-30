@@ -348,17 +348,17 @@ confirm_uninstall() {
 
     while true; do
 
-        printf '  %b¿Deseas continuar? [S/n]: %b' \
+        printf '  %b¿Deseas continuar? [s/N]: %b' \
             "$YELLOW$BOLD" "$RESET"
 
         IFS= read -r answer || return 1
 
         case "${answer,,}" in
-            ""|s|si|sí|y|yes)
+            s|si|sí|y|yes)
                 return 0
                 ;;
 
-            n|no)
+            ""|n|no)
                 return 1
                 ;;
 
@@ -737,6 +737,7 @@ main() {
 
     printf '\n'
     line
+    printf '\n'
 
     if (( ${#FOUND_SERVICES[@]} > 0 )); then
 
