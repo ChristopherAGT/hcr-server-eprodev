@@ -103,7 +103,6 @@ warning() {
 }
 
 section() {
-    printf '\n'
     printf '  %b◆%b  %b%s%b\n' "$CYAN" "$RESET" "$WHITE$BOLD" "$1" "$RESET"
     printf '\n'
 }
