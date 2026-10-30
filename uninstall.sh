@@ -149,6 +149,14 @@ spinner() {
     local message="$1"
     shift
 
+    local quiet_success=0
+
+    # Permitir ocultar únicamente el mensaje de éxito del spinner.
+    if [[ "${1:-}" == "--quiet-success" ]]; then
+        quiet_success=1
+        shift
+    fi
+
     local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴')
     local pid
     local status=0
@@ -184,8 +192,12 @@ spinner() {
     fi
 
     if (( status == 0 )); then
-        printf '\r\033[2K  %b✓%b  %b%s%b\n' \
-            "$GREEN$BOLD" "$RESET" "$WHITE" "$message" "$RESET"
+        if (( quiet_success == 0 )); then
+            printf '\r\033[2K  %b✓%b  %b%s%b\n' \
+                "$GREEN$BOLD" "$RESET" "$WHITE" "$message" "$RESET"
+        else
+            printf '\r\033[2K'
+        fi
     else
         printf '\r\033[2K  %b✗%b  %b%s%b\n' \
             "$RED$BOLD" "$RESET" "$RED" "$message" "$RESET"
@@ -615,7 +627,7 @@ show_summary() {
 
     # El total de archivos aparece siempre como primera línea.
     printf '  %b%-*s%b %b%*s%b\n' \
-        "$GRAY" "$label_width" "Total de archivos eliminados:" "$RESET" \
+        "$GRAY" "$label_width" "Total archivos eliminados:" "$RESET" \
         "$GREEN$BOLD" "$value_width" "$REMOVED_FILES" "$RESET"
 
     printf '  %b%-*s%b %b%*s%b\n' \
@@ -671,7 +683,9 @@ main() {
 
     # La detección devuelve los servicios por salida estándar.
     # El spinner captura esa salida para recuperarla en el proceso principal.
-    if ! spinner "Buscando servicios HCR instalados" detect_services; then
+    # Se oculta el mensaje de éxito para evitar una línea redundante
+    # cuando no existen componentes HCR instalados.
+    if ! spinner "Buscando servicios HCR instalados" --quiet-success detect_services; then
         error "No se pudieron detectar los servicios."
         exit 1
     fi
@@ -687,7 +701,6 @@ main() {
        [[ ! -e "$INSTALL_DIR" && ! -L "$INSTALL_DIR" ]]; then
 
         success "No se encontraron componentes de HCR para eliminar."
-
         printf '\n'
         line
         exit 0
