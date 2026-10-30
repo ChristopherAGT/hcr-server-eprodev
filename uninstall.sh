@@ -703,6 +703,7 @@ main() {
        [[ ! -e "$BINARY_PATH" && ! -L "$BINARY_PATH" ]] &&
        [[ ! -e "$INSTALL_DIR" && ! -L "$INSTALL_DIR" ]]; then
 
+        printf '\n'
         success "No se encontraron componentes de HCR para eliminar."
         printf '\n'
         line
