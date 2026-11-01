@@ -48,6 +48,12 @@ MAX_TIMEOUT=30
 MIN_INTERVAL=10
 MAX_INTERVAL=300
 
+DEFAULT_MAX_CONNECTIONS="2048"
+DEFAULT_MAX_SESSIONS="32"
+DEFAULT_MAX_SESSIONS_PER_IP="16"
+DEFAULT_MAX_DOWNLOAD_FRAME="16384"
+DEFAULT_DOWNLOAD_POLL_TIMEOUT="25s"
+
 DEFAULT_INTERVAL="60s"
 
 # -------------------- COLORES -------------------------------
@@ -787,7 +793,7 @@ show_service_health() {
     printf '  %bTotal de servicios:%b          %b%s%b\n' \
         "$GRAY" "$RESET" "$WHITE$BOLD" "$total_count" "$RESET"
 
-    printf '  %bServicios funcionando:%b      %b%s%b\n' \
+    printf '  %bServicios funcionando:%b       %b%s%b\n' \
         "$GRAY" "$RESET" "$GREEN$BOLD" "$active_count" "$RESET"
 
     printf '  %bServicios con problemas:%b     %b%s%b\n' \
@@ -814,7 +820,7 @@ show_summary() {
     line
     section "RESUMEN DE CONFIGURACIÓN"
 
-    printf '  %b%-30s%b %b%s%b\n' \
+    printf '  %b%-28s%b %b%s%b\n' \
         "$CYAN" "${SELECTED_LABEL}:" "$RESET" \
         "$WHITE$BOLD" "$PARAMETER_VALUE" "$RESET"
 
@@ -1084,13 +1090,26 @@ configure_parameter() {
     line
     printf '\n'
 
-    input_default="$CURRENT_VALUE"
-
-    if [[ "$option" == "7" || "$option" == "8" ]]; then
-        if [[ "$CURRENT_VALUE" == "0" ]]; then
+    case "$option" in
+        1)
+            input_default="$DEFAULT_MAX_CONNECTIONS"
+            ;;
+        2)
+            input_default="$DEFAULT_MAX_SESSIONS"
+            ;;
+        3)
+            input_default="$DEFAULT_MAX_SESSIONS_PER_IP"
+            ;;
+        4)
+            input_default="$DEFAULT_MAX_DOWNLOAD_FRAME"
+            ;;
+        5)
+            input_default="$DEFAULT_DOWNLOAD_POLL_TIMEOUT"
+            ;;
+        7|8)
             input_default="$DEFAULT_INTERVAL"
-        fi
-    fi
+            ;;
+    esac
 
     prompt="  ${MAGENTA}${BOLD}Nuevo valor${RESET} ${DIM}[${input_default}]${RESET}: "
 
@@ -1101,7 +1120,6 @@ configure_parameter() {
             1|2|3)
                 if valid_positive_integer "$input"; then
                     PARAMETER_VALUE=$((10#$input))
-                    printf '\033[u\033[2K'
                     break
                 fi
                 ;;
@@ -1109,7 +1127,6 @@ configure_parameter() {
             4)
                 if valid_frame "$input"; then
                     PARAMETER_VALUE=$((10#$input))
-                    printf '\033[u\033[2K'
                     break
                 fi
                 ;;
@@ -1117,14 +1134,12 @@ configure_parameter() {
             5)
                 if valid_timeout "$input"; then
                     normalize_timeout "$input"
-                    printf '\033[u\033[2K'
                     break
                 fi
                 ;;
 
             7|8)
                 if normalize_interval "$input"; then
-                    printf '\033[u\033[2K'
                     break
                 fi
                 ;;
