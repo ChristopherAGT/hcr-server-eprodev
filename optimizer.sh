@@ -10,8 +10,8 @@ umask 077
 # FUNCIONES:
 #   - Detección automática de todos los servicios HCR.
 #   - Edición global de parámetros multipuerto.
-#   - Menú interactivo de selección de parámetros.
-#   - Modificación individual de los parámetros HCR.
+#   - Menú interactivo con valores actuales alineados.
+#   - Pantalla independiente para cada opción seleccionada.
 #   - Activación y desactivación global de Session Stats
 #     y Diagnostics mediante una sola opción.
 #   - Estado ON/OFF automático en el menú.
@@ -25,6 +25,7 @@ umask 077
 #   - Spinner animado de seis puntos.
 #   - Interfaz visual moderna con estados por color.
 #   - Consultas reciclables sin duplicar líneas.
+#   - Espera silenciosa de ENTER para volver al menú.
 #
 # ============================================================
 
@@ -104,7 +105,7 @@ section() {
     printf '\n'
 }
 
-# -------------------- ENCABEZADO ----------------------------
+# -------------------- ENCABEZADO PRINCIPAL ------------------
 
 header() {
     clear 2>/dev/null || true
@@ -137,6 +138,52 @@ header() {
 
     printf '\n'
     line
+    printf '\n'
+}
+
+# -------------------- ENCABEZADO DE EDICIÓN -----------------
+
+edit_header() {
+    clear 2>/dev/null || true
+
+    local width=58
+    local title="HCR SERVER EPRO DEV"
+    local subtitle="E D I T O R   D E   P A R Á M E T R O"
+
+    printf '\n\n'
+
+    printf '%*s%bHCR%b %bSERVER%b %bEPRO DEV%b\n' \
+        "$(( (width - ${#title}) / 2 ))" '' \
+        "$CYAN$BOLD" "$RESET" \
+        "$WHITE$BOLD" "$RESET" \
+        "$MAGENTA$BOLD"
+
+    printf '%*s%b%s%b\n' \
+        "$(( (width - ${#subtitle}) / 2 ))" '' \
+        "$MAGENTA$BOLD" "$subtitle" "$RESET"
+
+    printf '\n'
+
+    printf '%b%s%b\n' \
+        "$DIM$MAGENTA" \
+        "────────────────────────────────────────────────────────" \
+        "$RESET"
+
+    printf '\n'
+
+    printf '  %b●%b  %bMODO MAESTRO%b\n' \
+        "$MAGENTA" "$RESET" "$WHITE$BOLD" "$RESET"
+
+    printf '  %b●%b  %bSCRIPT BY. ChristopherAGT%b\n' \
+        "$YELLOW" "$RESET" "$MAGENTA$BOLD" "$RESET"
+
+    printf '\n'
+
+    printf '%b%s%b\n' \
+        "$DIM$MAGENTA" \
+        "────────────────────────────────────────────────────────" \
+        "$RESET"
+
     printf '\n'
 }
 
@@ -198,6 +245,13 @@ ask_recyclable() {
     value="${value:-$default}"
 
     printf -v "$variable_name" '%s' "$value"
+}
+
+# -------------------- ESPERA SILENCIOSA ---------------------
+
+wait_for_enter() {
+    local ignored
+    IFS= read -r ignored || return 1
 }
 
 # -------------------- ESPERA Y RECICLAJE --------------------
@@ -271,7 +325,9 @@ import re
 import sys
 
 path, parameter = sys.argv[1:3]
-pattern = re.compile(r'(?<!\S)--' + re.escape(parameter) + r'(?:=|\s+)([^\s]+)')
+pattern = re.compile(
+    r'(?<!\S)--' + re.escape(parameter) + r'(?:=|\s+)([^\s]+)'
+)
 
 with open(path, "r", encoding="utf-8") as f:
     content = f.read()
@@ -297,6 +353,7 @@ inspect_parameter() {
     local file
     local value
     local first_value=""
+    local initialized=0
     local different=0
 
     for file in "${SERVICES[@]}"; do
@@ -305,8 +362,9 @@ inspect_parameter() {
             return 1
         fi
 
-        if [[ -z "$first_value" ]]; then
+        if (( initialized == 0 )); then
             first_value="$value"
+            initialized=1
         elif [[ "$value" != "$first_value" ]]; then
             different=1
         fi
@@ -318,14 +376,52 @@ inspect_parameter() {
     return 0
 }
 
+# -------------------- VALORES DEL MENÚ -----------------------
+
+get_display_value() {
+    local parameter="$1"
+    local file
+    local value
+    local first_value=""
+    local initialized=0
+    local different=0
+
+    for file in "${SERVICES[@]}"; do
+
+        if ! value="$(get_parameter_value "$file" "$parameter" 2>/dev/null)"; then
+            printf '%s' "N/D"
+            return 0
+        fi
+
+        if (( initialized == 0 )); then
+            first_value="$value"
+            initialized=1
+        elif [[ "$value" != "$first_value" ]]; then
+            different=1
+        fi
+    done
+
+    if (( initialized == 0 )); then
+        printf '%s' "N/D"
+    elif (( different )); then
+        printf '%s' "VARIOS"
+    else
+        printf '%s' "$first_value"
+    fi
+}
+
 # -------------------- ESTADO SESSION STATS / DIAGNOSTICS ----
 
 get_feature_state() {
     local file
     local stats_value
     local diagnostics_value
+    local initialized=0
+    local first_stats=""
+    local first_diagnostics=""
 
     FEATURE_ENABLED=0
+    FEATURE_VALUES_DIFFERENT=0
 
     for file in "${SERVICES[@]}"; do
 
@@ -339,74 +435,37 @@ get_feature_state() {
             return 1
         fi
 
+        if (( initialized == 0 )); then
+            first_stats="$stats_value"
+            first_diagnostics="$diagnostics_value"
+            initialized=1
+        elif [[ "$stats_value" != "$first_stats" ||
+                "$diagnostics_value" != "$first_diagnostics" ]]; then
+            FEATURE_VALUES_DIFFERENT=1
+        fi
+
         if [[ "$stats_value" != "0" || "$diagnostics_value" != "0" ]]; then
             FEATURE_ENABLED=1
         fi
     done
 
+    FEATURE_STATS_CURRENT="$first_stats"
+    FEATURE_DIAGNOSTICS_CURRENT="$first_diagnostics"
+
     return 0
 }
 
 show_feature_status() {
-    local status
-
     if ! get_feature_state >/dev/null 2>&1; then
-        status="N/D"
-        printf '%b%14s%b' "$YELLOW$BOLD" "$status" "$RESET"
+        printf '%b[N/D]%b' "$YELLOW$BOLD" "$RESET"
         return 0
     fi
 
     if (( FEATURE_ENABLED )); then
-        status="[ON]"
-        printf '%b%14s%b' "$GREEN$BOLD" "$status" "$RESET"
+        printf '%b[ON]%b' "$GREEN$BOLD" "$RESET"
     else
-        status="[OFF]"
-        printf '%b%14s%b' "$RED$BOLD" "$status" "$RESET"
+        printf '%b[OFF]%b' "$RED$BOLD" "$RESET"
     fi
-}
-
-# -------------------- MOSTRAR VALORES EN EL MENÚ ------------
-
-show_menu_parameter() {
-    local option="$1"
-    local label="$2"
-    local parameter="$3"
-
-    local file
-    local value
-    local first_value=""
-    local different=0
-    local display_value
-    local display_color
-
-    for file in "${SERVICES[@]}"; do
-        if ! value="$(get_parameter_value "$file" "$parameter" 2>/dev/null)"; then
-            display_value="N/D"
-            display_color="$RED$BOLD"
-            break
-        fi
-
-        if [[ -z "$first_value" ]]; then
-            first_value="$value"
-        elif [[ "$value" != "$first_value" ]]; then
-            different=1
-        fi
-    done
-
-    if [[ -z "$display_value" ]]; then
-        if (( different )); then
-            display_value="DIFERENTES"
-            display_color="$YELLOW$BOLD"
-        else
-            display_value="$first_value"
-            display_color="$CYAN$BOLD"
-        fi
-    fi
-
-    printf '  %b[%s]%b  %-36s %b%14s%b\n' \
-        "$CYAN$BOLD" "$option" "$RESET" \
-        "$label" \
-        "$display_color" "$display_value" "$RESET"
 }
 
 # -------------------- VALIDACIÓN NUMÉRICA -------------------
@@ -519,7 +578,6 @@ modify_services() {
         temp_file="$(mktemp)"
 
         if ! python3 - "$file" "$temp_file" "$SELECTED_PARAMETER" "$PARAMETER_VALUE" <<'PY'
-import os
 import re
 import sys
 
@@ -679,14 +737,48 @@ restart_services() {
     return "$failed"
 }
 
-# -------------------- RESUMEN FINAL -------------------------
+# -------------------- RESUMEN ESTADO DE SERVICIOS ------------
 
-show_summary() {
+show_service_health() {
     local file
     local service
     local active_count=0
     local failed_count=0
     local total_count="${#SERVICES[@]}"
+
+    for file in "${SERVICES[@]}"; do
+        service="$(basename "$file")"
+
+        if systemctl is-active --quiet "$service"; then
+            active_count=$((active_count + 1))
+        else
+            failed_count=$((failed_count + 1))
+        fi
+    done
+
+    printf '  %bTotal de servicios:%b          %b%s%b\n' \
+        "$GRAY" "$RESET" "$WHITE$BOLD" "$total_count" "$RESET"
+
+    printf '  %bServicios funcionando:%b      %b%s%b\n' \
+        "$GRAY" "$RESET" "$GREEN$BOLD" "$active_count" "$RESET"
+
+    printf '  %bServicios con problemas:%b     %b%s%b\n' \
+        "$GRAY" "$RESET" "$RED$BOLD" "$failed_count" "$RESET"
+
+    printf '\n'
+
+    if (( failed_count > 0 )); then
+        warning "Algunos servicios requieren atención."
+    else
+        success "Todos los servicios están funcionando correctamente."
+    fi
+
+    return 0
+}
+
+# -------------------- RESUMEN FINAL -------------------------
+
+show_summary() {
     local message
     local width=58
 
@@ -702,32 +794,7 @@ show_summary() {
     line
     section "ESTADO GENERAL DE LOS SERVICIOS"
 
-    for file in "${SERVICES[@]}"; do
-        service="$(basename "$file")"
-
-        if systemctl is-active --quiet "$service"; then
-            active_count=$((active_count + 1))
-        else
-            failed_count=$((failed_count + 1))
-        fi
-    done
-
-    printf '  %bTotal de servicios:%b          %b%s%b\n' \
-        "$GRAY" "$RESET" "$WHITE$BOLD" "$total_count" "$RESET"
-
-    printf '  %bServicios funcionando:%b      %b%s%b\n' \
-        "$GRAY" "$RESET" "$GREEN$BOLD" "$active_count" "$RESET"
-
-    printf '  %bServicios con problemas:%b     %b%s%b\n' \
-        "$GRAY" "$RESET" "$RED$BOLD" "$failed_count" "$RESET"
-
-    printf '\n'
-
-    if (( failed_count > 0 )); then
-        warning "Algunos servicios requieren atención."
-    else
-        success "Todos los servicios están funcionando correctamente."
-    fi
+    show_service_health
 
     printf '\n'
     info "Copia de seguridad: $BACKUP_DIR"
@@ -736,15 +803,26 @@ show_summary() {
     line
     printf '\n'
 
+    local failed_count=0
+
+    for file in "${SERVICES[@]}"; do
+        if ! systemctl is-active --quiet "$(basename "$file")"; then
+            failed_count=1
+            break
+        fi
+    done
+
     if (( failed_count > 0 )); then
         message="ACTUALIZACIÓN CON ADVERTENCIAS"
+        printf '%*s%b%s%b\n' \
+            "$(( (width - ${#message}) / 2 ))" '' \
+            "$YELLOW$BOLD" "$message" "$RESET"
     else
         message="ACTUALIZACIÓN COMPLETADA"
+        printf '%*s%b%s%b\n' \
+            "$(( (width - ${#message}) / 2 ))" '' \
+            "$GREEN$BOLD" "$message" "$RESET"
     fi
-
-    printf '%*s%b%s%b\n' \
-        "$(( (width - ${#message}) / 2 ))" '' \
-        "$GREEN$BOLD" "$message" "$RESET"
 
     printf '\n'
     line
@@ -754,13 +832,10 @@ show_summary() {
 # -------------------- RESUMEN SESSION STATS / DIAGNOSTICS ---
 
 show_feature_summary() {
-    local file
-    local service
-    local active_count=0
-    local failed_count=0
-    local total_count="${#SERVICES[@]}"
     local message
     local width=58
+    local failed_count=0
+    local file
 
     printf '\n'
     line
@@ -772,7 +847,8 @@ show_feature_summary() {
     printf '  %bDiagnostics:%b                %b%s%b\n' \
         "$CYAN" "$RESET" "$WHITE$BOLD" "$FEATURE_DIAGNOSTICS_VALUE" "$RESET"
 
-    if [[ "$FEATURE_STATS_VALUE" == "0" && "$FEATURE_DIAGNOSTICS_VALUE" == "0" ]]; then
+    if [[ "$FEATURE_STATS_VALUE" == "0" &&
+          "$FEATURE_DIAGNOSTICS_VALUE" == "0" ]]; then
         printf '  %bEstado general:%b             %b[OFF]%b\n' \
             "$GRAY" "$RESET" "$RED$BOLD" "$RESET"
     else
@@ -784,35 +860,17 @@ show_feature_summary() {
     line
     section "ESTADO GENERAL DE LOS SERVICIOS"
 
-    for file in "${SERVICES[@]}"; do
-        service="$(basename "$file")"
-
-        if systemctl is-active --quiet "$service"; then
-            active_count=$((active_count + 1))
-        else
-            failed_count=$((failed_count + 1))
-        fi
-    done
-
-    printf '  %bTotal de servicios:%b          %b%s%b\n' \
-        "$GRAY" "$RESET" "$WHITE$BOLD" "$total_count" "$RESET"
-
-    printf '  %bServicios funcionando:%b      %b%s%b\n' \
-        "$GRAY" "$RESET" "$GREEN$BOLD" "$active_count" "$RESET"
-
-    printf '  %bServicios con problemas:%b     %b%s%b\n' \
-        "$GRAY" "$RESET" "$RED$BOLD" "$failed_count" "$RESET"
-
-    printf '\n'
-
-    if (( failed_count > 0 )); then
-        warning "Algunos servicios requieren atención."
-    else
-        success "Todos los servicios están funcionando correctamente."
-    fi
+    show_service_health
 
     printf '\n'
     info "Copia de seguridad: $BACKUP_DIR"
+
+    for file in "${SERVICES[@]}"; do
+        if ! systemctl is-active --quiet "$(basename "$file")"; then
+            failed_count=1
+            break
+        fi
+    done
 
     printf '\n'
     line
@@ -820,13 +878,15 @@ show_feature_summary() {
 
     if (( failed_count > 0 )); then
         message="ACTUALIZACIÓN CON ADVERTENCIAS"
+        printf '%*s%b%s%b\n' \
+            "$(( (width - ${#message}) / 2 ))" '' \
+            "$YELLOW$BOLD" "$message" "$RESET"
     else
         message="ACTUALIZACIÓN COMPLETADA"
+        printf '%*s%b%s%b\n' \
+            "$(( (width - ${#message}) / 2 ))" '' \
+            "$GREEN$BOLD" "$message" "$RESET"
     fi
-
-    printf '%*s%b%s%b\n' \
-        "$(( (width - ${#message}) / 2 ))" '' \
-        "$GREEN$BOLD" "$message" "$RESET"
 
     printf '\n'
     line
@@ -837,14 +897,15 @@ show_feature_summary() {
 
 configure_feature_toggle() {
 
+    SELECTED_LABEL="Session Stats & Diagnostics"
+    edit_header
+
     if ! get_feature_state; then
         error "No se pudo determinar el estado de los parámetros."
         return 1
     fi
 
-    printf '\n'
-    line
-    section "SESSION STATS & DIAGNOSTICS"
+    section "CONFIGURACIÓN DE FUNCIONES"
 
     if (( FEATURE_ENABLED )); then
 
@@ -965,21 +1026,29 @@ configure_parameter() {
         return 1
     fi
 
-    printf '\n'
-    line
-    section "EDICIÓN DE PARÁMETRO"
+    edit_header
 
-    printf '  %bParámetro:%b %b%s%b\n' \
-        "$GRAY" "$RESET" "$WHITE$BOLD" "$SELECTED_LABEL" "$RESET"
+    section "CONFIGURACIÓN DEL PARÁMETRO"
+
+    printf '  %b⌬%b  %b%s%b\n' \
+        "$MAGENTA$BOLD" "$RESET" \
+        "$WHITE$BOLD" "$SELECTED_LABEL" "$RESET"
+
+    printf '\n'
 
     if (( VALUES_DIFFERENT )); then
         warning "Los servicios tienen valores actuales diferentes."
         info "Valor de referencia: $CURRENT_VALUE"
         info "El nuevo valor se aplicará globalmente."
     else
-        info "Valor actual: $CURRENT_VALUE"
+        printf '  %b⦿%b  %bValor actual:%b %b%s%b\n' \
+            "$CYAN$BOLD" "$RESET" \
+            "$GRAY" "$RESET" \
+            "$CYAN$BOLD" "$CURRENT_VALUE" "$RESET"
     fi
 
+    printf '\n'
+    line
     printf '\n'
 
     input_default="$CURRENT_VALUE"
@@ -990,7 +1059,7 @@ configure_parameter() {
         fi
     fi
 
-    prompt="  ${CYAN}${BOLD}Nuevo valor${RESET} ${DIM}[${input_default}]${RESET}: "
+    prompt="  ${MAGENTA}${BOLD}Nuevo valor${RESET} ${DIM}[${input_default}]${RESET}: "
 
     while true; do
         ask_recyclable "$prompt" "$input_default" input || return 1
@@ -1066,30 +1135,73 @@ configure_parameter() {
 # -------------------- MENÚ PRINCIPAL ------------------------
 
 show_menu() {
-    header
+    local value
 
+    header
     show_service_count
 
     printf '\n'
     line
-    section "SELECCIONA EL PARÁMETRO"
+    printf '\n'
 
-    show_menu_parameter 1 "Max Connections" "max-connections"
-    show_menu_parameter 2 "Max Sessions" "max-sessions"
-    show_menu_parameter 3 "Max Sessions Per IP" "max-sessions-per-ip"
-    show_menu_parameter 4 "Max Download Frame" "max-download-frame"
-    show_menu_parameter 5 "Download Poll Timeout" "download-poll-timeout"
+    # Título y encabezado de valores en la misma línea.
+    printf '  %b◆%b  %b%-34s%b %b%15s%b\n\n' \
+        "$CYAN" "$RESET" \
+        "$WHITE$BOLD" "SELECCIONA EL PARÁMETRO" "$RESET" \
+        "$DIM$GRAY" "VALOR ACTUAL" "$RESET"
 
-    printf '  %b[6]%b  %-36s ' \
-        "$CYAN$BOLD" "6" "$RESET" "Session Stats & Diagnostics"
+    value="$(get_display_value "max-connections")"
+    printf '  %b[1]%b  %-32s %b%14.14s%b\n' \
+        "$CYAN$BOLD" "$RESET" \
+        "Max Connections" \
+        "$CYAN$BOLD" "$value" "$RESET"
+
+    value="$(get_display_value "max-sessions")"
+    printf '  %b[2]%b  %-32s %b%14.14s%b\n' \
+        "$CYAN$BOLD" "$RESET" \
+        "Max Sessions" \
+        "$CYAN$BOLD" "$value" "$RESET"
+
+    value="$(get_display_value "max-sessions-per-ip")"
+    printf '  %b[3]%b  %-32s %b%14.14s%b\n' \
+        "$CYAN$BOLD" "$RESET" \
+        "Max Sessions Per IP" \
+        "$CYAN$BOLD" "$value" "$RESET"
+
+    value="$(get_display_value "max-download-frame")"
+    printf '  %b[4]%b  %-32s %b%14.14s%b\n' \
+        "$CYAN$BOLD" "$RESET" \
+        "Max Download Frame" \
+        "$CYAN$BOLD" "$value" "$RESET"
+
+    value="$(get_display_value "download-poll-timeout")"
+    printf '  %b[5]%b  %-32s %b%14.14s%b\n' \
+        "$CYAN$BOLD" "$RESET" \
+        "Download Poll Timeout" \
+        "$CYAN$BOLD" "$value" "$RESET"
+
+    # Estado de Session Stats y Diagnostics, junto a su opción.
+    printf '  %b[6]%b  %bSession Stats & Diagnostics%b ' \
+        "$CYAN$BOLD" "$RESET" \
+        "$WHITE" "$RESET"
 
     show_feature_status
     printf '\n'
 
-    # Las opciones 7 y 8 solo aparecen cuando la opción 6 está ON.
+    # Los intervalos solo aparecen cuando la función está ON.
     if (( FEATURE_ENABLED )); then
-        show_menu_parameter 7 "Session Stats Interval" "session-stats-interval"
-        show_menu_parameter 8 "Diagnostics Interval" "diagnostics-interval"
+
+        value="$(get_display_value "session-stats-interval")"
+        printf '  %b[7]%b  %-32s %b%14.14s%b\n' \
+            "$CYAN$BOLD" "$RESET" \
+            "Session Stats Interval" \
+            "$CYAN$BOLD" "$value" "$RESET"
+
+        value="$(get_display_value "diagnostics-interval")"
+        printf '  %b[8]%b  %-32s %b%14.14s%b\n' \
+            "$CYAN$BOLD" "$RESET" \
+            "Diagnostics Interval" \
+            "$CYAN$BOLD" "$value" "$RESET"
     fi
 
     printf '\n'
@@ -1138,14 +1250,10 @@ main() {
                     warning "No se pudo completar la operación."
                 fi
 
-                printf '\n'
-                warning "Presiona ENTER para volver al menú..."
-                IFS= read -r _ || break
+                wait_for_enter || break
                 ;;
 
             7|8)
-                # Verifica nuevamente el estado para impedir
-                # ejecutar opciones ocultas cuando están OFF.
                 if ! get_feature_state; then
                     error "No se pudo determinar el estado de los parámetros."
                 elif (( ! FEATURE_ENABLED )); then
@@ -1156,9 +1264,7 @@ main() {
                     fi
                 fi
 
-                printf '\n'
-                warning "Presiona ENTER para volver al menú..."
-                IFS= read -r _ || break
+                wait_for_enter || break
                 ;;
 
             6)
@@ -1166,9 +1272,7 @@ main() {
                     warning "No se pudo completar la operación."
                 fi
 
-                printf '\n'
-                warning "Presiona ENTER para volver al menú..."
-                IFS= read -r _ || break
+                wait_for_enter || break
                 ;;
 
             0)
