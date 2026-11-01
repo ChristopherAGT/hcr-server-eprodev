@@ -18,7 +18,9 @@ umask 077
 #   - Activación automática con intervalos de 60s.
 #   - Validación de intervalos entre 10s y 300s.
 #   - Conservación de los demás parámetros.
-#   - Copias de seguridad de las configuraciones originales.
+#   - Copias de seguridad identificadas por parámetro y fecha.
+#   - Respaldo completo de todos los servicios detectados.
+#   - Restauración automática ante fallos críticos.
 #   - Actualización automática de systemd.
 #   - Reinicio de todos los servicios modificados.
 #   - Resumen del estado general de los servicios.
@@ -34,7 +36,8 @@ umask 077
 SERVICE_PREFIX="hcr-server"
 SERVICE_DIR="/etc/systemd/system"
 
-BACKUP_BASE="/var/backups/hcr-parameter-control"
+BACKUP_BASE="/var/backups/hcr-parameters"
+BACKUP_DIR=""
 
 MIN_FRAME=1
 MAX_FRAME=262140
@@ -272,7 +275,7 @@ wait_and_recycle() {
 check_requirements() {
     local command
 
-    for command in systemctl awk sed grep sort install cp mktemp python3; do
+    for command in systemctl awk sed grep sort install cp mktemp python3 date; do
         if ! command -v "$command" >/dev/null 2>&1; then
             error "Falta una dependencia: $command"
             return 1
@@ -553,18 +556,38 @@ normalize_interval() {
     return 0
 }
 
-# -------------------- COPIA DE SEGURIDAD --------------------
+# -------------------- PREPARAR COPIA DE SEGURIDAD ------------
+
+prepare_backup_target() {
+    local backup_name="$1"
+    local timestamp
+
+    install -d -m 700 "$BACKUP_BASE" || return 1
+
+    timestamp="$(date '+%Y%m%d-%H%M%S')"
+
+    # BACKUP_DIR se establece en el proceso principal.
+    # No se asigna dentro del spinner ni de un subshell.
+    BACKUP_DIR="$(mktemp -d \
+        "${BACKUP_BASE}/${backup_name}-${timestamp}-XXXXXXXX")" || return 1
+
+    chmod 700 "$BACKUP_DIR"
+
+    return 0
+}
+
+# -------------------- CREAR COPIA DE SEGURIDAD ---------------
 
 create_backup() {
     local file
 
-    install -d -m 700 "$BACKUP_BASE"
-
-    BACKUP_DIR="$(mktemp -d "${BACKUP_BASE}/backup-XXXXXXXX")"
+    [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]] || return 1
 
     for file in "${SERVICES[@]}"; do
-        cp -a "$file" "$BACKUP_DIR/"
+        cp -a "$file" "$BACKUP_DIR/" || return 1
     done
+
+    return 0
 }
 
 # -------------------- MODIFICAR SERVICIOS --------------------
@@ -701,6 +724,11 @@ PY
 rollback_services() {
     local file
     local backup_file
+
+    if [[ -z "$BACKUP_DIR" || ! -d "$BACKUP_DIR" ]]; then
+        error "No se encontró el respaldo para restaurar."
+        return 1
+    fi
 
     for file in "${SERVICES[@]}"; do
         backup_file="$BACKUP_DIR/$(basename "$file")"
@@ -937,6 +965,11 @@ configure_feature_toggle() {
     line
     section "APLICANDO CONFIGURACIÓN"
 
+    if ! prepare_backup_target "session-stats-diagnostics"; then
+        error "No se pudo preparar el directorio de respaldo."
+        return 1
+    fi
+
     if ! spinner "Creando copias de seguridad" create_backup; then
         error "No se pudieron crear las copias de seguridad."
         return 1
@@ -1103,6 +1136,11 @@ configure_parameter() {
     printf '\n'
     line
     section "APLICANDO CONFIGURACIÓN"
+
+    if ! prepare_backup_target "$SELECTED_PARAMETER"; then
+        error "No se pudo preparar el directorio de respaldo."
+        return 1
+    fi
 
     if ! spinner "Creando copias de seguridad" create_backup; then
         error "No se pudieron crear las copias de seguridad."
