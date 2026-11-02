@@ -5,8 +5,8 @@ umask 077
 SERVICE="${1:-hcr-server-80.service}"
 
 # ============================================================
-#                 HCR SERVER EPRO DEV
-#                      JSON MONITOR
+#                  HCR SERVER EPRO DEV
+#                     JSON MONITOR
 #                       PROFESSIONAL
 # ============================================================
 
@@ -43,14 +43,19 @@ fi
 # -------------------- FUNCIONES VISUALES --------------------
 
 line() {
-    printf '%b\n' "${DIM}${BLUE}────────────────────────────────────────────────────────${RESET}"
+    local selected="${1:-$MAGENTA}"
+
+    printf '%b\n' \
+        "${DIM}${selected}────────────────────────────────────────────────────────${RESET}"
 }
 
 section() {
+    local title="$1"
+    local selected="${2:-$CYAN}"
+
     printf '\n'
     printf '  %b◆%b  %b%s%b\n' \
-        "$CYAN" "$RESET" "$WHITE$BOLD" "$1" "$RESET"
-    printf '\n'
+        "$selected" "$RESET" "$WHITE$BOLD" "$title" "$RESET"
 }
 
 success() {
@@ -122,16 +127,15 @@ header() {
 
     printf '\n'
     line
-    printf '\n'
 
-    section "CATEGORÍAS DE EVENTOS"
+    section "CATEGORÍAS DE EVENTOS" "$CYAN"
 
-    printf '  %bSESSION_STATS%b          Estadísticas de sesiones\n' "$GREEN"
-    printf '  %bPATH_DIAGNOSTICS%b       Diagnóstico de operaciones\n' "$CYAN"
-    printf '  %bCONNECTION_DIAGNOSTICS%b Diagnóstico de conexiones\n' "$MAGENTA"
-    printf '  %bCONFIGURATION%b          Configuración del servidor\n' "$BLUE"
-    printf '  %bLISTENER_STATUS%b        Estado del listener\n' "$GREEN"
-    printf '  %bOTHER%b                  Otros eventos\n' "$GRAY"
+    printf '  %bSESSION_STATS%b          Estadísticas de sesiones\n' "$GREEN" "$RESET"
+    printf '  %bPATH_DIAGNOSTICS%b       Diagnóstico de operaciones\n' "$CYAN" "$RESET"
+    printf '  %bCONNECTION_DIAGNOSTICS%b Diagnóstico de conexiones\n' "$MAGENTA" "$RESET"
+    printf '  %bCONFIGURATION%b          Configuración del servidor\n' "$BLUE" "$RESET"
+    printf '  %bLISTENER_STATUS%b        Estado del listener\n' "$GREEN" "$RESET"
+    printf '  %bOTHER%b                  Otros eventos\n' "$GRAY" "$RESET"
 
     printf '\n'
     line
@@ -197,9 +201,6 @@ main() {
 
     trap 'exit 0' INT TERM
 
-    # Evitar que una salida normal de journalctl al recibir
-    # CTRL+C termine mostrando un error de pipefail.
-
     set +e
 
     journalctl \
@@ -224,7 +225,7 @@ SERVICE = sys.argv[1]
 
 WIDTH = 58
 LABEL_WIDTH = 25
-VALUE_WIDTH = 29
+INDENT = 2
 
 RESET   = "\033[0m"
 BOLD    = "\033[1m"
@@ -243,6 +244,74 @@ USE_COLOR = sys.stdout.isatty()
 
 
 # ============================================================
+#                  IDENTIDAD VISUAL POR CATEGORÍA
+# ============================================================
+
+CATEGORY_COLORS = {
+
+    "SESSION_STATS": GREEN,
+
+    "PATH_DIAGNOSTICS": CYAN,
+
+    "CONNECTION_DIAGNOSTICS": MAGENTA,
+
+    "CONFIGURATION": BLUE,
+
+    "LISTENER_STATUS": GREEN,
+
+    "LISTENER_EVENTS": GREEN,
+
+    "OTHER_DIAGNOSTICS": CYAN,
+
+    "OTHER_PATH_EVENTS": CYAN,
+
+    "SESSION_EVENTS": GREEN,
+
+    "CONNECTION_EVENTS": MAGENTA,
+
+    "OTHER": GRAY,
+
+    "MONITOR_ERROR": RED
+}
+
+
+SECTION_COLORS = {
+
+    "SUMMARY": CYAN,
+
+    "OPERATIONS": BLUE,
+
+    "LAST": YELLOW,
+
+    "FIRST FAILURE": RED,
+
+    "LAST FAILURE": RED,
+
+    "FAILURE ANALYSIS": RED,
+
+    "DETECTED CONDITIONS": YELLOW,
+
+    "SESSION COUNTERS": GREEN,
+
+    "CONNECTIONS": MAGENTA,
+
+    "UNASSIGNED": CYAN,
+
+    "UPLOAD": GREEN,
+
+    "DOWNLOAD": BLUE,
+
+    "INDICATORS": YELLOW,
+
+    "DIAGNOSTICS": CYAN,
+
+    "FIRST FAILURE ANALYSIS": RED,
+
+    "LAST FAILURE ANALYSIS": RED
+}
+
+
+# ============================================================
 #                     FUNCIONES BASE
 # ============================================================
 
@@ -258,30 +327,36 @@ def color(value, selected):
 
 def now():
 
-    return datetime.now().astimezone().isoformat()
+    return datetime.now().astimezone().isoformat(
+        timespec="milliseconds"
+    )
 
 
 def safe_int(value, default=0):
 
     try:
+
         if value is None:
             return default
 
         return int(value)
 
     except (ValueError, TypeError, OverflowError):
+
         return default
 
 
 def safe_number(value, default=None):
 
     try:
+
         if value is None:
             return default
 
         return float(value)
 
     except (ValueError, TypeError, OverflowError):
+
         return default
 
 
@@ -341,6 +416,7 @@ def safe_bool(value):
         return value != 0
 
     if isinstance(value, str):
+
         return value.strip().lower() in (
             "true", "1", "yes", "on"
         )
@@ -452,14 +528,25 @@ def analyze_failure(operation):
     code = failure.get("code")
 
     return {
-        "type": classify_error(kind, phase, code),
+
+        "type": classify_error(
+            kind,
+            phase,
+            code
+        ),
+
         "phase": phase,
+
         "kind": kind,
+
         "code": code,
+
         "sequence": failure.get("seq"),
+
         "elapsed_ms": duration_ms(
             failure.get("elapsed_us")
         ),
+
         "request_complete": failure.get(
             "request_complete"
         )
@@ -472,9 +559,13 @@ def analyze_failure(operation):
 
 def analyze_session(data):
 
-    closed = safe_bool(data.get("closed"))
+    closed_value = data.get("closed")
+    closed = safe_bool(closed_value)
 
-    status = "CLOSED" if closed else "ACTIVE"
+    if closed_value is None:
+        status = "UNKNOWN"
+    else:
+        status = "CLOSED" if closed else "ACTIVE"
 
     upload_pending = safe_int(
         data.get("upload_pending")
@@ -530,10 +621,10 @@ def analyze_session(data):
 
             "has_replay_data": replay_bytes > 0,
 
-            "session_closed": closed
+            "session_closed": closed_value
         },
 
-        "closed": closed
+        "closed": closed_value
     }
 
 
@@ -566,6 +657,7 @@ def analyze_operation(operation):
     detected = []
 
     if failed > 0:
+
         detected.append(
             failure.get("type")
             if failure and failure.get("type")
@@ -573,6 +665,7 @@ def analyze_operation(operation):
         )
 
     if rejected > 0:
+
         detected.append("REJECTED")
 
         rejection_error = classify_error(
@@ -839,12 +932,15 @@ def analyze_connections(data):
     failure = last_failure or first_failure
 
     if failure:
+
         error_type = classify_error(
             failure.get("kind"),
             failure.get("phase"),
             failure.get("code")
         )
+
     else:
+
         error_type = classify_error(
             last.get("kind"),
             last.get("phase"),
@@ -854,21 +950,22 @@ def analyze_connections(data):
     conditions = []
 
     if failed > 0:
+
         status = "FAILURE"
         conditions.append(error_type or "FAILURE")
 
     elif rejected > 0:
+
         status = "REJECTED"
         conditions.append("REJECTED")
 
     elif limited > 0:
+
         status = "LIMITED"
         conditions.append("LIMITED")
 
-    elif completed > 0:
-        status = "NORMAL"
-
     else:
+
         status = "NORMAL"
 
     return {
@@ -1026,8 +1123,11 @@ def analyze_listener(data):
     msg = get_message(data)
 
     states = {
+
         "listener_started": "STARTED",
+
         "listener_stopped": "STOPPED",
+
         "listener_closed": "CLOSED"
     }
 
@@ -1080,46 +1180,6 @@ def get_severity(category, analysis):
 
 
 # ============================================================
-#                     COLOR POR EVENTO
-# ============================================================
-
-def get_color(category, severity):
-
-    if severity == "ERROR":
-        return RED
-
-    if severity == "WARNING":
-        return YELLOW
-
-    colors = {
-
-        "SESSION_STATS": GREEN,
-
-        "PATH_DIAGNOSTICS": CYAN,
-
-        "CONNECTION_DIAGNOSTICS": MAGENTA,
-
-        "CONFIGURATION": BLUE,
-
-        "LISTENER_STATUS": GREEN,
-
-        "LISTENER_EVENTS": GREEN,
-
-        "OTHER_DIAGNOSTICS": CYAN,
-
-        "OTHER_PATH_EVENTS": CYAN,
-
-        "SESSION_EVENTS": GREEN,
-
-        "CONNECTION_EVENTS": MAGENTA,
-
-        "OTHER": WHITE
-    }
-
-    return colors.get(category, WHITE)
-
-
-# ============================================================
 #                  CONSTRUCCIÓN DEL RESULTADO
 # ============================================================
 
@@ -1132,21 +1192,26 @@ def build_result(data):
     analysis = {}
 
     if category == "SESSION_STATS":
+
         analysis = analyze_session(data)
 
     elif category == "PATH_DIAGNOSTICS":
+
         analysis = analyze_path(data)
 
     elif category == "CONNECTION_DIAGNOSTICS":
+
         analysis = analyze_connections(data)
 
     elif category == "CONFIGURATION":
+
         analysis = analyze_configuration(data)
 
     elif category in (
         "LISTENER_STATUS",
         "LISTENER_EVENTS"
     ):
+
         analysis = analyze_listener(data)
 
     severity = get_severity(
@@ -1191,17 +1256,19 @@ def build_raw_result(line):
         "received_at": now(),
 
         "analysis": {
+
             "status": "UNSTRUCTURED_LOG"
         },
 
         "data": {
+
             "raw": line
         }
     }
 
 
 # ============================================================
-#                    FORMATO DE PRESENTACIÓN
+#                  FORMATO DE PRESENTACIÓN
 # ============================================================
 
 def display_value(value):
@@ -1226,7 +1293,10 @@ def terminal_color_for_status(value):
         "FAILURE",
         "ERROR",
         "PARSE_ERROR",
-        "PROCESSING_ERROR"
+        "PROCESSING_ERROR",
+        "SEQUENCE_ERROR",
+        "IO_ERROR",
+        "PROTOCOL_ERROR"
     ):
         return RED
 
@@ -1235,7 +1305,8 @@ def terminal_color_for_status(value):
         "LIMITED",
         "WARNING",
         "STOPPED",
-        "CLOSED"
+        "CLOSED",
+        "TIMEOUT"
     ):
         return YELLOW
 
@@ -1244,26 +1315,61 @@ def terminal_color_for_status(value):
         "ACTIVE",
         "STARTED",
         "CONFIGURED",
-        "INFO"
+        "INFO",
+        "TRUE"
     ):
         return GREEN
 
     if status in (
         "NO_ACTIVITY",
         "NOTICE",
-        "UNSTRUCTURED_LOG"
+        "UNSTRUCTURED_LOG",
+        "FALSE",
+        "UNKNOWN"
     ):
         return GRAY
 
     return CYAN
 
 
-def print_line(selected=BLUE):
+def get_category_color(category):
 
-    print(color(
-        "  " + "─" * (WIDTH - 2),
-        DIM + selected
-    ))
+    return CATEGORY_COLORS.get(
+        category,
+        WHITE
+    )
+
+
+def get_section_color(key, default):
+
+    normalized = str(key).replace(
+        "_",
+        " "
+    ).upper()
+
+    return SECTION_COLORS.get(
+        normalized,
+        default
+    )
+
+
+# ============================================================
+#                    SEPARADORES
+# ============================================================
+
+def print_line(selected=MAGENTA, width=None):
+
+    if width is None:
+        width = WIDTH
+
+    width = max(12, min(width, WIDTH))
+
+    print(
+        color(
+            "  " + "─" * (width - 2),
+            DIM + selected
+        )
+    )
 
 
 def print_center(text, selected=WHITE):
@@ -1273,37 +1379,49 @@ def print_center(text, selected=WHITE):
     if len(text) > WIDTH - 4:
         text = text[:WIDTH - 7] + "..."
 
-    padding = max(0, (WIDTH - len(text)) // 2)
+    padding = max(
+        0,
+        (WIDTH - len(text)) // 2
+    )
 
     print(
         " " * padding +
-        color(text, BOLD + selected)
+        color(
+            text,
+            BOLD + selected
+        )
     )
 
 
-def print_section(title, selected=CYAN):
+def print_section(title, selected=CYAN, depth=0):
+
+    title = str(title).replace(
+        "_",
+        " "
+    ).upper()
+
+    indent = "  " + ("  " * depth)
 
     print()
+
     print(
-        "  " +
+        indent +
         color("◆", selected) +
         "  " +
-        color(title, BOLD + WHITE)
+        color(
+            title,
+            BOLD + WHITE
+        )
     )
-    print()
 
 
-def print_pair(label, value, selected=CYAN, indent=2):
+# ============================================================
+#                 PRESENTACIÓN DE VALORES
+# ============================================================
 
-    label = str(label)
-    value = display_value(value)
+def print_wrapped_value(value, selected, indent):
 
-    if value == "":
-        return
-
-    prefix = " " * indent
-
-    available = WIDTH - indent - LABEL_WIDTH - 3
+    available = WIDTH - indent - 2
 
     if available < 10:
         available = 10
@@ -1311,86 +1429,253 @@ def print_pair(label, value, selected=CYAN, indent=2):
     wrapped = textwrap.wrap(
         value,
         width=available,
-        break_long_words=True,
-        break_on_hyphens=False
+        break_long_words=False,
+        break_on_hyphens=False,
+        replace_whitespace=True,
+        drop_whitespace=True
     ) or ["—"]
 
-    first = wrapped[0]
-
-    print(
-        prefix +
-        color(label[:LABEL_WIDTH].ljust(LABEL_WIDTH), GRAY) +
-        color(" : ", DIM) +
-        color(first, selected)
-    )
-
-    for extra in wrapped[1:]:
+    for part in wrapped:
 
         print(
-            prefix +
-            " " * (LABEL_WIDTH + 3) +
-            color(extra, selected)
+            " " * indent +
+            color(
+                part,
+                selected
+            )
         )
 
 
-def render_tree(data, depth=0):
+def print_pair(label, value, selected=CYAN, indent=2):
+
+    label = str(label).replace(
+        "_",
+        " "
+    ).upper()
+
+    value = display_value(value)
+
+    if value == "":
+        return
+
+    prefix = " " * indent
+
+    # --------------------------------------------------------
+    # TIMESTAMPS: ETIQUETA COMPACTA
+    # --------------------------------------------------------
+
+    if label in (
+        "TIME",
+        "RECIBIDO",
+        "TIMESTAMP",
+        "RECEIVED AT"
+    ):
+
+        print(
+            prefix +
+            color(label, GRAY) +
+            color(" : ", DIM) +
+            color(value, selected)
+        )
+
+        return
+
+    label_width = LABEL_WIDTH
+
+    value_width = (
+        WIDTH - indent - label_width - 3
+    )
+
+    if value_width < 10:
+        value_width = 10
+
+    label = label[:label_width]
+
+    # --------------------------------------------------------
+    # VALORES CORTOS
+    # --------------------------------------------------------
+
+    if len(value) <= value_width:
+
+        print(
+            prefix +
+            color(
+                label.ljust(label_width),
+                GRAY
+            ) +
+            color(" : ", DIM) +
+            color(
+                value,
+                selected
+            )
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # VALORES EXTENSOS
+    # --------------------------------------------------------
+
+    print(
+        prefix +
+        color(
+            label.ljust(label_width),
+            GRAY
+        ) +
+        color(" : ", DIM)
+    )
+
+    print_wrapped_value(
+        value,
+        selected,
+        indent + label_width + 3
+    )
+
+
+# ============================================================
+#                   ÁRBOL DE INFORMACIÓN
+# ============================================================
+
+def render_tree(
+    data,
+    depth=0,
+    category_color=CYAN
+):
 
     if isinstance(data, dict):
 
         for key, value in data.items():
 
-            label = str(key).replace("_", " ").upper()
+            label = str(key).replace(
+                "_",
+                " "
+            ).upper()
+
+            # ------------------------------------------------
+            # OBJETOS
+            # ------------------------------------------------
 
             if isinstance(value, dict):
 
                 if not value:
-                    print_pair(label, "{}")
+
+                    print_pair(
+                        label,
+                        "{}",
+                        category_color
+                    )
+
                     continue
+
+                selected = get_section_color(
+                    label,
+                    category_color
+                )
 
                 print_section(
                     label,
-                    MAGENTA if depth == 0 else CYAN
+                    selected,
+                    depth
                 )
 
-                render_tree(value, depth + 1)
+                print_line(
+                    selected,
+                    WIDTH - min(depth * 2, 12)
+                )
+
+                render_tree(
+                    value,
+                    depth + 1,
+                    category_color
+                )
+
+            # ------------------------------------------------
+            # LISTAS
+            # ------------------------------------------------
 
             elif isinstance(value, list):
 
                 if not value:
-                    print_pair(label, "Sin elementos")
+
+                    print_pair(
+                        label,
+                        "Sin elementos",
+                        GRAY
+                    )
+
                     continue
 
-                print_section(label)
+                selected = get_section_color(
+                    label,
+                    category_color
+                )
+
+                print_section(
+                    label,
+                    selected,
+                    depth
+                )
+
+                print_line(
+                    selected,
+                    WIDTH - min(depth * 2, 12)
+                )
 
                 for index, item in enumerate(value, 1):
 
                     print_pair(
                         "ELEMENTO",
                         index,
-                        MAGENTA
+                        selected
                     )
 
                     if isinstance(item, (dict, list)):
-                        render_tree(item, depth + 1)
+
+                        render_tree(
+                            item,
+                            depth + 1,
+                            category_color
+                        )
+
                     else:
-                        print_pair("VALOR", item)
+
+                        print_pair(
+                            "VALOR",
+                            item,
+                            selected
+                        )
+
+            # ------------------------------------------------
+            # VALORES SIMPLES
+            # ------------------------------------------------
 
             else:
 
-                selected = (
-                    terminal_color_for_status(value)
-                    if key.lower() in (
-                        "status",
-                        "severity",
-                        "enabled",
-                        "closed",
-                        "request complete",
-                        "response prepared"
-                    )
-                    else CYAN
-                )
+                if key.lower() in (
+                    "status",
+                    "severity",
+                    "enabled",
+                    "closed",
+                    "request_complete",
+                    "response_prepared",
+                    "has_pending_upload",
+                    "has_replay_data",
+                    "session_closed"
+                ):
 
-                print_pair(label, value, selected)
+                    selected = terminal_color_for_status(
+                        value
+                    )
+
+                else:
+
+                    selected = category_color
+
+                print_pair(
+                    label,
+                    value,
+                    selected
+                )
 
 
 # ============================================================
@@ -1399,25 +1684,37 @@ def render_tree(data, depth=0):
 
 def render_record(result):
 
-    category = result.get("record_type", "OTHER")
-    event = result.get("event", "UNKNOWN")
-    severity = result.get("severity", "NOTICE")
-
-    selected = get_color(
-        category,
-        severity
+    category = result.get(
+        "record_type",
+        "OTHER"
     )
+
+    event = result.get(
+        "event",
+        "UNKNOWN"
+    )
+
+    severity = result.get(
+        "severity",
+        "NOTICE"
+    )
+
+    selected = get_category_color(category)
 
     status_color = terminal_color_for_status(
         severity
     )
+
+    # ========================================================
+    # IDENTIFICACIÓN DEL EVENTO
+    # ========================================================
 
     print()
     print_line(selected)
 
     print_center(
         "HCR SERVER EPRO DEV",
-        CYAN
+        selected
     )
 
     print_center(
@@ -1434,7 +1731,7 @@ def render_record(result):
     )
 
     print_pair(
-        "CATEGORIA",
+        "CATEGORÍA",
         category,
         selected
     )
@@ -1459,7 +1756,14 @@ def render_record(result):
 
     print_line(selected)
 
-    analysis = result.get("analysis", {})
+    # ========================================================
+    # ANÁLISIS DEL EVENTO
+    # ========================================================
+
+    analysis = result.get(
+        "analysis",
+        {}
+    )
 
     if analysis:
 
@@ -1468,20 +1772,50 @@ def render_record(result):
             selected
         )
 
-        render_tree(analysis)
+        print_line(selected)
 
-    original = result.get("data", {})
+        render_tree(
+            analysis,
+            category_color=selected
+        )
+
+    # ========================================================
+    # DATOS ORIGINALES HCR
+    # ========================================================
+
+    original = result.get(
+        "data",
+        {}
+    )
 
     if original:
 
-        print_line(BLUE)
+        print()
+        print_line(MAGENTA)
+
+        print_center(
+            "REGISTRO ORIGINAL",
+            MAGENTA
+        )
 
         print_section(
             "DATOS ORIGINALES HCR",
-            BLUE
+            MAGENTA
         )
 
-        render_tree(original)
+        print_line(MAGENTA)
+
+        # Los valores originales conservan el color
+        # de su categoría, no todo queda en magenta.
+
+        render_tree(
+            original,
+            category_color=selected
+        )
+
+    # ========================================================
+    # FIN DEL REGISTRO
+    # ========================================================
 
     print()
     print_line(selected)
@@ -1539,6 +1873,7 @@ def process(line):
             },
 
             "data": {
+
                 "raw": line
             }
         }
@@ -1567,6 +1902,7 @@ try:
     for line in sys.stdin:
 
         try:
+
             process(line)
 
         except Exception as error:
@@ -1584,6 +1920,7 @@ try:
                 "received_at": now(),
 
                 "analysis": {
+
                     "error": str(error)
                 }
             }
@@ -1591,21 +1928,40 @@ try:
             render_record(result)
 
 except KeyboardInterrupt:
+
     pass
 
 ' "$SERVICE"
 
-    local pipeline_status="${PIPESTATUS[0]:-0}"
+    # --------------------------------------------------------
+    # ESTADO DE LA TUBERÍA
+    # --------------------------------------------------------
+
+    local -a pipeline_statuses=("${PIPESTATUS[@]}")
+
+    local journal_status="${pipeline_statuses[0]:-0}"
+    local python_status="${pipeline_statuses[1]:-0}"
+
     set -e
 
-    # journalctl puede terminar con código 130 al recibir CTRL+C.
-    # Esa salida es normal en este monitor.
+    # --------------------------------------------------------
+    # VALIDAR SALIDA
+    # --------------------------------------------------------
 
-    if (( pipeline_status != 0 &&
-          pipeline_status != 130 &&
-          pipeline_status != 143 )); then
-        error "El proceso de monitorización terminó inesperadamente."
-        exit "$pipeline_status"
+    if (( python_status != 0 &&
+          python_status != 130 &&
+          python_status != 143 )); then
+
+        error "El proceso Python del monitor terminó inesperadamente."
+        exit "$python_status"
+    fi
+
+    if (( journal_status != 0 &&
+          journal_status != 130 &&
+          journal_status != 143 )); then
+
+        error "Journalctl terminó inesperadamente."
+        exit "$journal_status"
     fi
 
     printf '\n'
