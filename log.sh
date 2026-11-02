@@ -10,81 +10,225 @@ SERVICE="${1:-hcr-server-80.service}"
 #                       PROFESSIONAL
 # ============================================================
 
-# ------------------------------------------------------------
-# VALIDACIÓN DE DEPENDENCIAS
-# ------------------------------------------------------------
+# -------------------- COLORES -------------------------------
 
-for command_name in journalctl python3 systemctl grep; do
-    if ! command -v "$command_name" >/dev/null 2>&1; then
-        echo "ERROR: No se encontró el comando $command_name."
-        exit 1
-    fi
-done
+if [[ -t 1 ]]; then
+    RESET='\033[0m'
+    BOLD='\033[1m'
+    DIM='\033[2m'
 
-# ------------------------------------------------------------
-# VALIDACIÓN DEL SERVICIO
-# ------------------------------------------------------------
+    RED='\033[1;31m'
+    GREEN='\033[1;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[1;34m'
+    MAGENTA='\033[1;35m'
+    CYAN='\033[1;36m'
+    WHITE='\033[1;37m'
+    GRAY='\033[0;37m'
+else
+    RESET=''
+    BOLD=''
+    DIM=''
 
-if ! systemctl list-unit-files "$SERVICE" --no-legend 2>/dev/null |
-     grep -Fq "$SERVICE"; then
-
-    echo "ERROR: No se encontró el servicio $SERVICE"
-    exit 1
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    MAGENTA=''
+    CYAN=''
+    WHITE=''
+    GRAY=''
 fi
 
-# ------------------------------------------------------------
-# INTERFAZ
-# ------------------------------------------------------------
+# -------------------- FUNCIONES VISUALES --------------------
 
-clear
+line() {
+    printf '%b\n' "${DIM}${BLUE}────────────────────────────────────────────────────────${RESET}"
+}
 
-printf '\033[1;36m'
-echo "       HCR SERVER EPRO DEV"
-echo "          JSON MONITOR"
-printf '\033[0m'
+section() {
+    printf '\n'
+    printf '  %b◆%b  %b%s%b\n' \
+        "$CYAN" "$RESET" "$WHITE$BOLD" "$1" "$RESET"
+    printf '\n'
+}
 
-echo "────────────────────────────────────────────────────────"
-echo " Servicio : $SERVICE"
-echo " Formato  : JSON"
-echo " Modo     : TIEMPO REAL"
-echo " Análisis : AVANZADO"
-echo "────────────────────────────────────────────────────────"
-echo
-echo "Categorías:"
-echo "  SESSION_STATS          Estadísticas de sesiones"
-echo "  PATH_DIAGNOSTICS       Diagnóstico de operaciones"
-echo "  CONNECTION_DIAGNOSTICS Diagnóstico de conexiones"
-echo "  CONFIGURATION          Configuración del servidor"
-echo "  LISTENER_STATUS        Estado del listener"
-echo "  OTHER                  Otros eventos"
-echo
-echo "Esperando registros... (CTRL+C para salir)"
-echo
+success() {
+    printf '  %b✓%b  %b%s%b\n' \
+        "$GREEN" "$RESET" "$WHITE" "$1" "$RESET"
+}
 
-# ------------------------------------------------------------
-# MONITOR EN TIEMPO REAL
-# ------------------------------------------------------------
+error() {
+    printf '  %b✗%b  %b%s%b\n' \
+        "$RED" "$RESET" "$RED" "$1" "$RESET"
+}
 
-trap 'exit 0' INT TERM
+info() {
+    printf '  %b›%b  %b%s%b\n' \
+        "$CYAN" "$RESET" "$WHITE" "$1" "$RESET"
+}
 
-journalctl \
-    --unit="$SERVICE" \
-    --follow \
-    --lines=0 \
-    --output=cat \
-    --no-pager |
-python3 -u -c '
+warning() {
+    printf '  %b!%b  %b%s%b\n' \
+        "$YELLOW" "$RESET" "$YELLOW" "$1" "$RESET"
+}
+
+# -------------------- ENCABEZADO ----------------------------
+
+header() {
+    clear 2>/dev/null || true
+
+    local width=58
+    local title="HCR SERVER EPRO DEV"
+    local subtitle="J S O N   M O N I T O R"
+
+    printf '\n\n'
+
+    printf '%*s%bHCR%b %bSERVER%b %bEPRO DEV%b\n' \
+        "$(( (width - ${#title}) / 2 ))" '' \
+        "$CYAN$BOLD" "$RESET" \
+        "$WHITE$BOLD" "$RESET" \
+        "$MAGENTA$BOLD" "$RESET"
+
+    printf '%*s%b%s%b\n' \
+        "$(( (width - ${#subtitle}) / 2 ))" '' \
+        "$MAGENTA$BOLD" "$subtitle" "$RESET"
+
+    printf '\n'
+    line
+    printf '\n'
+
+    printf '  %b●%b  %bMONITORIZACIÓN DE EVENTOS HCR%b\n' \
+        "$GREEN" "$RESET" "$WHITE$BOLD" "$RESET"
+
+    printf '  %b●%b  %bSCRIPT BY. ChristopherAGT%b\n' \
+        "$YELLOW" "$RESET" "$GRAY" "$RESET"
+
+    printf '\n'
+    line
+    printf '\n'
+
+    printf '  %bServicio:%b  %b%s%b\n' \
+        "$GRAY" "$RESET" "$CYAN$BOLD" "$SERVICE" "$RESET"
+
+    printf '  %bFormato:%b   %bJSON%b\n' \
+        "$GRAY" "$RESET" "$WHITE" "$RESET"
+
+    printf '  %bModo:%b      %bTIEMPO REAL%b\n' \
+        "$GRAY" "$RESET" "$GREEN$BOLD" "$RESET"
+
+    printf '  %bAnálisis:%b  %bAVANZADO%b\n' \
+        "$GRAY" "$RESET" "$MAGENTA$BOLD" "$RESET"
+
+    printf '\n'
+    line
+    printf '\n'
+
+    section "CATEGORÍAS DE EVENTOS"
+
+    printf '  %bSESSION_STATS%b          Estadísticas de sesiones\n' "$GREEN"
+    printf '  %bPATH_DIAGNOSTICS%b       Diagnóstico de operaciones\n' "$CYAN"
+    printf '  %bCONNECTION_DIAGNOSTICS%b Diagnóstico de conexiones\n' "$MAGENTA"
+    printf '  %bCONFIGURATION%b          Configuración del servidor\n' "$BLUE"
+    printf '  %bLISTENER_STATUS%b        Estado del listener\n' "$GREEN"
+    printf '  %bOTHER%b                  Otros eventos\n' "$GRAY"
+
+    printf '\n'
+    line
+    printf '\n'
+
+    success "Monitor iniciado correctamente."
+    info "Esperando registros nuevos de HCR..."
+    info "Presiona CTRL+C para salir."
+
+    printf '\n'
+    line
+    printf '\n'
+}
+
+# -------------------- DEPENDENCIAS --------------------------
+
+check_requirements() {
+    local command_name
+
+    for command_name in journalctl python3 systemctl; do
+        if ! command -v "$command_name" >/dev/null 2>&1; then
+            error "No se encontró el comando $command_name."
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# -------------------- VALIDAR SERVICIO ----------------------
+
+check_service() {
+    local state
+
+    state="$(systemctl show "$SERVICE" \
+        --property=LoadState --value 2>/dev/null || true)"
+
+    if [[ "$state" != "loaded" ]]; then
+        error "No se encontró el servicio $SERVICE."
+        return 1
+    fi
+
+    return 0
+}
+
+# -------------------- EJECUCIÓN -----------------------------
+
+main() {
+    if (( EUID != 0 )); then
+        error "Ejecuta el monitor como root."
+        exit 1
+    fi
+
+    if ! check_requirements; then
+        exit 1
+    fi
+
+    if ! check_service; then
+        exit 1
+    fi
+
+    header
+
+    trap 'exit 0' INT TERM
+
+    # Evitar que una salida normal de journalctl al recibir
+    # CTRL+C termine mostrando un error de pipefail.
+
+    set +e
+
+    journalctl \
+        --unit="$SERVICE" \
+        --follow \
+        --lines=0 \
+        --output=cat \
+        --no-pager |
+    python3 -u -c '
 
 import sys
 import json
+import textwrap
 from datetime import datetime
 
 
 # ============================================================
-#                         CONFIGURACIÓN
+#                     CONFIGURACIÓN
 # ============================================================
 
 SERVICE = sys.argv[1]
+
+WIDTH = 58
+LABEL_WIDTH = 25
+VALUE_WIDTH = 29
+
+RESET   = "\033[0m"
+BOLD    = "\033[1m"
+DIM     = "\033[2m"
 
 CYAN    = "\033[1;36m"
 BLUE    = "\033[1;34m"
@@ -93,13 +237,13 @@ YELLOW  = "\033[1;33m"
 RED     = "\033[1;31m"
 MAGENTA = "\033[1;35m"
 WHITE   = "\033[1;37m"
-RESET   = "\033[0m"
+GRAY    = "\033[0;37m"
 
 USE_COLOR = sys.stdout.isatty()
 
 
 # ============================================================
-#                       FUNCIONES BASE
+#                     FUNCIONES BASE
 # ============================================================
 
 def color(value, selected):
@@ -212,11 +356,9 @@ def classify(data):
 
     msg = get_message(data)
 
-    # Configuración
     if msg == "runtime_configured":
         return "CONFIGURATION"
 
-    # Listener
     if msg in (
         "listener_started",
         "listener_stopped",
@@ -227,7 +369,6 @@ def classify(data):
     if msg.startswith("listener_"):
         return "LISTENER_EVENTS"
 
-    # Session Stats
     if msg in (
         "session_stats",
         "session_statistics"
@@ -239,22 +380,18 @@ def classify(data):
     )):
         return "SESSION_STATS"
 
-    # Diagnóstico de conexiones
     if msg == "hcr_path_connections":
         return "CONNECTION_DIAGNOSTICS"
 
-    # Diagnóstico de operaciones
     if msg == "hcr_path":
         return "PATH_DIAGNOSTICS"
 
-    # Familia de diagnósticos
     if "diagnostic" in msg:
         return "OTHER_DIAGNOSTICS"
 
     if msg.startswith("hcr_path_"):
         return "OTHER_PATH_EVENTS"
 
-    # Eventos adicionales
     if msg.startswith("session_"):
         return "SESSION_EVENTS"
 
@@ -274,27 +411,18 @@ def classify_error(kind=None, phase=None, code=None):
     phase = str(phase or "").strip().lower()
     code = str(code or "").strip().upper()
 
-    # Error de secuencia
     if "sequence" in code:
         return "SEQUENCE_ERROR"
 
-    # Timeout
     if "timeout" in kind or "timeout" in phase:
         return "TIMEOUT"
 
-    # Error de entrada/salida
     if kind in ("io", "i/o"):
         return "IO_ERROR"
 
-    # Error de protocolo
     if "protocol" in kind or "protocol" in phase:
         return "PROTOCOL_ERROR"
 
-    # Código no vacío sin semántica conocida
-    if code:
-        return "CODE_PRESENT"
-
-    # Fallo genérico
     if kind in (
         "error",
         "failed",
@@ -306,7 +434,7 @@ def classify_error(kind=None, phase=None, code=None):
 
 
 # ============================================================
-#                  ANÁLISIS DE FALLOS
+#                    ANÁLISIS DE FALLOS
 # ============================================================
 
 def analyze_failure(operation):
@@ -314,7 +442,6 @@ def analyze_failure(operation):
     first = get_dict(operation, "first_failure")
     last = get_dict(operation, "last_failure")
 
-    # Priorizar el último fallo; si no existe, usar el primero.
     failure = last or first
 
     if not failure:
@@ -340,7 +467,7 @@ def analyze_failure(operation):
 
 
 # ============================================================
-#                   ANÁLISIS DE SESSION STATS
+#                  ANÁLISIS SESSION STATS
 # ============================================================
 
 def analyze_session(data):
@@ -411,7 +538,7 @@ def analyze_session(data):
 
 
 # ============================================================
-#                  ANÁLISIS DE OPERACIONES
+#                    ANÁLISIS DE OPERACIONES
 # ============================================================
 
 def analyze_operation(operation):
@@ -439,10 +566,10 @@ def analyze_operation(operation):
     detected = []
 
     if failed > 0:
-
         detected.append(
             failure.get("type")
-            if failure else "FAILURE"
+            if failure and failure.get("type")
+            else "FAILURE"
         )
 
     if rejected > 0:
@@ -457,7 +584,6 @@ def analyze_operation(operation):
         if rejection_error:
             detected.append(rejection_error)
 
-    # Estado de la operación
     if failed > 0:
         status = "FAILURE"
 
@@ -514,8 +640,6 @@ def analyze_operation(operation):
 
             "code": code,
 
-            # Se conserva el código numérico.
-            # No se interpreta sin documentación oficial.
             "status_code": last.get("status"),
 
             "sequence": last.get("seq"),
@@ -564,7 +688,7 @@ def analyze_operation(operation):
 
 
 # ============================================================
-#                 ANÁLISIS GENERAL DE HCR_PATH
+#                  ANÁLISIS GENERAL HCR_PATH
 # ============================================================
 
 def analyze_path(data):
@@ -610,7 +734,6 @@ def analyze_path(data):
             result["detected_conditions"]
         )
 
-    # Estado general
     if total_failed > 0:
         status = "FAILURE"
 
@@ -678,7 +801,7 @@ def analyze_path(data):
 
 
 # ============================================================
-#               ANÁLISIS DE CONNECTION DIAGNOSTICS
+#              ANÁLISIS CONNECTION DIAGNOSTICS
 # ============================================================
 
 def analyze_connections(data):
@@ -713,7 +836,6 @@ def analyze_connections(data):
         "last_failure"
     )
 
-    # Seleccionar el detalle de fallo disponible.
     failure = last_failure or first_failure
 
     if failure:
@@ -847,7 +969,7 @@ def analyze_connections(data):
 
 
 # ============================================================
-#                  ANÁLISIS DE CONFIGURACIÓN
+#                   ANÁLISIS CONFIGURACIÓN
 # ============================================================
 
 def analyze_configuration(data):
@@ -927,7 +1049,7 @@ def analyze_listener(data):
 
 
 # ============================================================
-#                   ANÁLISIS DE SEVERIDAD
+#                    ANÁLISIS SEVERIDAD
 # ============================================================
 
 def get_severity(category, analysis):
@@ -958,7 +1080,7 @@ def get_severity(category, analysis):
 
 
 # ============================================================
-#                      COLOR POR EVENTO
+#                     COLOR POR EVENTO
 # ============================================================
 
 def get_color(category, severity):
@@ -1046,8 +1168,6 @@ def build_result(data):
 
         "analysis": analysis,
 
-        # Datos originales de HCR.
-        # No se eliminan ni se reinterpretan.
         "data": data
     }
 
@@ -1081,6 +1201,294 @@ def build_raw_result(line):
 
 
 # ============================================================
+#                    FORMATO DE PRESENTACIÓN
+# ============================================================
+
+def display_value(value):
+
+    if value is None:
+        return "—"
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+
+    if isinstance(value, (dict, list)):
+        return ""
+
+    return str(value)
+
+
+def terminal_color_for_status(value):
+
+    status = str(value).upper()
+
+    if status in (
+        "FAILURE",
+        "ERROR",
+        "PARSE_ERROR",
+        "PROCESSING_ERROR"
+    ):
+        return RED
+
+    if status in (
+        "REJECTED",
+        "LIMITED",
+        "WARNING",
+        "STOPPED",
+        "CLOSED"
+    ):
+        return YELLOW
+
+    if status in (
+        "NORMAL",
+        "ACTIVE",
+        "STARTED",
+        "CONFIGURED",
+        "INFO"
+    ):
+        return GREEN
+
+    if status in (
+        "NO_ACTIVITY",
+        "NOTICE",
+        "UNSTRUCTURED_LOG"
+    ):
+        return GRAY
+
+    return CYAN
+
+
+def print_line(selected=BLUE):
+
+    print(color(
+        "  " + "─" * (WIDTH - 2),
+        DIM + selected
+    ))
+
+
+def print_center(text, selected=WHITE):
+
+    text = str(text)
+
+    if len(text) > WIDTH - 4:
+        text = text[:WIDTH - 7] + "..."
+
+    padding = max(0, (WIDTH - len(text)) // 2)
+
+    print(
+        " " * padding +
+        color(text, BOLD + selected)
+    )
+
+
+def print_section(title, selected=CYAN):
+
+    print()
+    print(
+        "  " +
+        color("◆", selected) +
+        "  " +
+        color(title, BOLD + WHITE)
+    )
+    print()
+
+
+def print_pair(label, value, selected=CYAN, indent=2):
+
+    label = str(label)
+    value = display_value(value)
+
+    if value == "":
+        return
+
+    prefix = " " * indent
+
+    available = WIDTH - indent - LABEL_WIDTH - 3
+
+    if available < 10:
+        available = 10
+
+    wrapped = textwrap.wrap(
+        value,
+        width=available,
+        break_long_words=True,
+        break_on_hyphens=False
+    ) or ["—"]
+
+    first = wrapped[0]
+
+    print(
+        prefix +
+        color(label[:LABEL_WIDTH].ljust(LABEL_WIDTH), GRAY) +
+        color(" : ", DIM) +
+        color(first, selected)
+    )
+
+    for extra in wrapped[1:]:
+
+        print(
+            prefix +
+            " " * (LABEL_WIDTH + 3) +
+            color(extra, selected)
+        )
+
+
+def render_tree(data, depth=0):
+
+    if isinstance(data, dict):
+
+        for key, value in data.items():
+
+            label = str(key).replace("_", " ").upper()
+
+            if isinstance(value, dict):
+
+                if not value:
+                    print_pair(label, "{}")
+                    continue
+
+                print_section(
+                    label,
+                    MAGENTA if depth == 0 else CYAN
+                )
+
+                render_tree(value, depth + 1)
+
+            elif isinstance(value, list):
+
+                if not value:
+                    print_pair(label, "Sin elementos")
+                    continue
+
+                print_section(label)
+
+                for index, item in enumerate(value, 1):
+
+                    print_pair(
+                        "ELEMENTO",
+                        index,
+                        MAGENTA
+                    )
+
+                    if isinstance(item, (dict, list)):
+                        render_tree(item, depth + 1)
+                    else:
+                        print_pair("VALOR", item)
+
+            else:
+
+                selected = (
+                    terminal_color_for_status(value)
+                    if key.lower() in (
+                        "status",
+                        "severity",
+                        "enabled",
+                        "closed",
+                        "request complete",
+                        "response prepared"
+                    )
+                    else CYAN
+                )
+
+                print_pair(label, value, selected)
+
+
+# ============================================================
+#                     FICHA DEL EVENTO
+# ============================================================
+
+def render_record(result):
+
+    category = result.get("record_type", "OTHER")
+    event = result.get("event", "UNKNOWN")
+    severity = result.get("severity", "NOTICE")
+
+    selected = get_color(
+        category,
+        severity
+    )
+
+    status_color = terminal_color_for_status(
+        severity
+    )
+
+    print()
+    print_line(selected)
+
+    print_center(
+        "HCR SERVER EPRO DEV",
+        CYAN
+    )
+
+    print_center(
+        "EVENTO DETECTADO",
+        WHITE
+    )
+
+    print_line(selected)
+
+    print_pair(
+        "EVENTO",
+        event,
+        selected
+    )
+
+    print_pair(
+        "CATEGORIA",
+        category,
+        selected
+    )
+
+    print_pair(
+        "SEVERIDAD",
+        severity,
+        status_color
+    )
+
+    print_pair(
+        "SERVICIO",
+        result.get("service"),
+        WHITE
+    )
+
+    print_pair(
+        "RECIBIDO",
+        result.get("received_at"),
+        GRAY
+    )
+
+    print_line(selected)
+
+    analysis = result.get("analysis", {})
+
+    if analysis:
+
+        print_section(
+            "ANÁLISIS DEL EVENTO",
+            selected
+        )
+
+        render_tree(analysis)
+
+    original = result.get("data", {})
+
+    if original:
+
+        print_line(BLUE)
+
+        print_section(
+            "DATOS ORIGINALES HCR",
+            BLUE
+        )
+
+        render_tree(original)
+
+    print()
+    print_line(selected)
+    print()
+
+
+# ============================================================
 #                    PROCESAMIENTO JSON
 # ============================================================
 
@@ -1093,26 +1501,14 @@ def process(line):
 
     start = line.find("{")
 
-    # Registro sin JSON
     if start < 0:
 
         result = build_raw_result(line)
 
-        print(
-            color(
-                json.dumps(
-                    result,
-                    indent=2,
-                    ensure_ascii=False
-                ),
-                YELLOW
-            ),
-            flush=True
-        )
+        render_record(result)
 
         return
 
-    # Extraer JSON permitiendo texto posterior.
     try:
 
         decoder = json.JSONDecoder()
@@ -1147,17 +1543,7 @@ def process(line):
             }
         }
 
-        print(
-            color(
-                json.dumps(
-                    result,
-                    indent=2,
-                    ensure_ascii=False
-                ),
-                RED
-            ),
-            flush=True
-        )
+        render_record(result)
 
         return
 
@@ -1169,26 +1555,11 @@ def process(line):
 
     result = build_result(data)
 
-    selected_color = get_color(
-        result["record_type"],
-        result["severity"]
-    )
-
-    print(
-        color(
-            json.dumps(
-                result,
-                indent=2,
-                ensure_ascii=False
-            ),
-            selected_color
-        ),
-        flush=True
-    )
+    render_record(result)
 
 
 # ============================================================
-#                       BUCLE PRINCIPAL
+#                      BUCLE PRINCIPAL
 # ============================================================
 
 try:
@@ -1217,21 +1588,29 @@ try:
                 }
             }
 
-            print(
-                color(
-                    json.dumps(
-                        result,
-                        indent=2,
-                        ensure_ascii=False
-                    ),
-                    RED
-                ),
-                flush=True
-            )
+            render_record(result)
 
 except KeyboardInterrupt:
     pass
 
 ' "$SERVICE"
 
-exit 0
+    local pipeline_status="${PIPESTATUS[0]:-0}"
+    set -e
+
+    # journalctl puede terminar con código 130 al recibir CTRL+C.
+    # Esa salida es normal en este monitor.
+
+    if (( pipeline_status != 0 &&
+          pipeline_status != 130 &&
+          pipeline_status != 143 )); then
+        error "El proceso de monitorización terminó inesperadamente."
+        exit "$pipeline_status"
+    fi
+
+    printf '\n'
+    success "Monitor detenido correctamente."
+    printf '\n'
+}
+
+main "$@"
