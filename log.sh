@@ -2,13 +2,29 @@
 set -Eeuo pipefail
 umask 077
 
-SERVICE="${1:-hcr-server-80.service}"
-
 # ============================================================
 #                  HCR SERVER EPRO DEV
 #                     JSON MONITOR
-#                       PROFESSIONAL
+#                    MULTI-SERVICE PRO
 # ============================================================
+#
+# FUNCIONES:
+#   - Detección automática de servicios HCR.
+#   - Monitorización simultánea multipuerto.
+#   - Identificación del servicio de origen.
+#   - Encabezado persistente.
+#   - Contador de eventos en tiempo real.
+#   - Área de registros con desplazamiento independiente.
+#   - Análisis avanzado de eventos JSON.
+#   - Clasificación de errores y diagnósticos.
+#
+# SCRIPT BY. ChristopherAGT
+#
+# ============================================================
+
+# -------------------- CONFIGURACIÓN -------------------------
+
+SERVICE_FILTER="${1:-}"
 
 # -------------------- COLORES -------------------------------
 
@@ -78,9 +94,111 @@ warning() {
         "$YELLOW" "$RESET" "$YELLOW" "$1" "$RESET"
 }
 
-# -------------------- ENCABEZADO ----------------------------
+# -------------------- DEPENDENCIAS --------------------------
+
+check_requirements() {
+    local command_name
+
+    for command_name in journalctl python3 systemctl; do
+        if ! command -v "$command_name" >/dev/null 2>&1; then
+            error "No se encontró el comando $command_name."
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# -------------------- DETECCIÓN DE SERVICIOS ----------------
+
+declare -a SERVICES=()
+
+detect_services() {
+
+    local service
+    local state
+
+    SERVICES=()
+
+    # --------------------------------------------------------
+    # MODO MANUAL
+    # --------------------------------------------------------
+
+    if [[ -n "$SERVICE_FILTER" ]]; then
+
+        if [[ "$SERVICE_FILTER" != "hcr-server.service" &&
+              ! "$SERVICE_FILTER" =~ ^hcr-server-[^.]+\.service$ ]]; then
+
+            error "Nombre de servicio HCR no válido."
+            return 1
+        fi
+
+        state="$(systemctl show "$SERVICE_FILTER" \
+            --property=LoadState --value 2>/dev/null || true)"
+
+        if [[ "$state" != "loaded" ]]; then
+            error "No se encontró el servicio $SERVICE_FILTER."
+            return 1
+        fi
+
+        SERVICES+=("$SERVICE_FILTER")
+
+        return 0
+    fi
+
+    # --------------------------------------------------------
+    # DETECCIÓN AUTOMÁTICA
+    # --------------------------------------------------------
+
+    while IFS= read -r service; do
+
+        [[ -z "$service" ]] && continue
+
+        if [[ "$service" == "hcr-server.service" ||
+              "$service" =~ ^hcr-server-[^.]+\.service$ ]]; then
+
+            SERVICES+=("$service")
+
+        fi
+
+    done < <(
+        systemctl list-unit-files \
+            --type=service \
+            --no-legend \
+            --no-pager 2>/dev/null |
+        awk '{print $1}'
+    )
+
+    # --------------------------------------------------------
+    # VALIDAR RESULTADOS
+    # --------------------------------------------------------
+
+    if (( ${#SERVICES[@]} == 0 )); then
+
+        error "No se encontraron servicios HCR instalados."
+        info "Se esperaba hcr-server.service o hcr-server-<puerto>.service."
+
+        return 1
+    fi
+
+    return 0
+}
+
+# -------------------- ESTADO DE SERVICIOS -------------------
+
+get_service_state() {
+
+    local service="$1"
+
+    systemctl show "$service" \
+        --property=ActiveState \
+        --value 2>/dev/null || printf 'unknown'
+}
+
+# -------------------- ENCABEZADO INICIAL --------------------
 
 header() {
+
     clear 2>/dev/null || true
 
     local width=58
@@ -103,7 +221,7 @@ header() {
     line
     printf '\n'
 
-    printf '  %b●%b  %bMONITORIZACIÓN DE EVENTOS HCR%b\n' \
+    printf '  %b●%b  %bMONITORIZACIÓN MULTI-SERVICE%b\n' \
         "$GREEN" "$RESET" "$WHITE$BOLD" "$RESET"
 
     printf '  %b●%b  %bSCRIPT BY. ChristopherAGT%b\n' \
@@ -113,17 +231,43 @@ header() {
     line
     printf '\n'
 
-    printf '  %bServicio:%b  %b%s%b\n' \
-        "$GRAY" "$RESET" "$CYAN$BOLD" "$SERVICE" "$RESET"
+    printf '  %bServicios detectados:%b  %b%s%b\n' \
+        "$GRAY" "$RESET" "$CYAN$BOLD" "${#SERVICES[@]}" "$RESET"
 
-    printf '  %bFormato:%b   %bJSON%b\n' \
+    printf '  %bFormato:%b               %bJSON%b\n' \
         "$GRAY" "$RESET" "$WHITE" "$RESET"
 
-    printf '  %bModo:%b      %bTIEMPO REAL%b\n' \
+    printf '  %bModo:%b                  %bTIEMPO REAL%b\n' \
         "$GRAY" "$RESET" "$GREEN$BOLD" "$RESET"
 
-    printf '  %bAnálisis:%b  %bAVANZADO%b\n' \
+    printf '  %bAnálisis:%b              %bAVANZADO%b\n' \
         "$GRAY" "$RESET" "$MAGENTA$BOLD" "$RESET"
+
+    printf '\n'
+    line
+
+    section "SERVICIOS DETECTADOS" "$CYAN"
+
+    local service
+    local state
+
+    for service in "${SERVICES[@]}"; do
+
+        state="$(get_service_state "$service")"
+
+        if [[ "$state" == "active" ]]; then
+
+            printf '  %b●%b  %-31s %bACTIVE%b\n' \
+                "$GREEN" "$RESET" "$service" "$GREEN" "$RESET"
+
+        else
+
+            printf '  %b●%b  %-31s %b%s%b\n' \
+                "$YELLOW" "$RESET" "$service" "$YELLOW" "$state" "$RESET"
+
+        fi
+
+    done
 
     printf '\n'
     line
@@ -133,16 +277,17 @@ header() {
     printf '  %bSESSION_STATS%b          Estadísticas de sesiones\n' "$GREEN" "$RESET"
     printf '  %bPATH_DIAGNOSTICS%b       Diagnóstico de operaciones\n' "$CYAN" "$RESET"
     printf '  %bCONNECTION_DIAGNOSTICS%b Diagnóstico de conexiones\n' "$MAGENTA" "$RESET"
-    printf '  %bCONFIGURATION%b          Configuración del servidor\n' "$BLUE" "$RESET"
-    printf '  %bLISTENER_STATUS%b        Estado del listener\n' "$GREEN" "$RESET"
-    printf '  %bOTHER%b                  Otros eventos\n' "$GRAY" "$RESET"
+    printf '  %bCONFIGURATION%b         Configuración del servidor\n' "$BLUE" "$RESET"
+    printf '  %bLISTENER_STATUS%b       Estado del listener\n' "$GREEN" "$RESET"
+    printf '  %bOTHER%b                 Otros eventos\n' "$GRAY" "$RESET"
 
     printf '\n'
     line
     printf '\n'
 
     success "Monitor iniciado correctamente."
-    info "Esperando registros nuevos de HCR..."
+    info "Servicios HCR conectados al seguimiento."
+    info "Esperando registros nuevos..."
     info "Presiona CTRL+C para salir."
 
     printf '\n'
@@ -150,40 +295,12 @@ header() {
     printf '\n'
 }
 
-# -------------------- DEPENDENCIAS --------------------------
-
-check_requirements() {
-    local command_name
-
-    for command_name in journalctl python3 systemctl; do
-        if ! command -v "$command_name" >/dev/null 2>&1; then
-            error "No se encontró el comando $command_name."
-            return 1
-        fi
-    done
-
-    return 0
-}
-
-# -------------------- VALIDAR SERVICIO ----------------------
-
-check_service() {
-    local state
-
-    state="$(systemctl show "$SERVICE" \
-        --property=LoadState --value 2>/dev/null || true)"
-
-    if [[ "$state" != "loaded" ]]; then
-        error "No se encontró el servicio $SERVICE."
-        return 1
-    fi
-
-    return 0
-}
-
-# -------------------- EJECUCIÓN -----------------------------
+# ============================================================
+#                     VALIDACIÓN PRINCIPAL
+# ============================================================
 
 main() {
+
     if (( EUID != 0 )); then
         error "Ejecuta el monitor como root."
         exit 1
@@ -193,27 +310,45 @@ main() {
         exit 1
     fi
 
-    if ! check_service; then
+    if ! detect_services; then
         exit 1
     fi
 
     header
 
-    trap 'exit 0' INT TERM
+    # --------------------------------------------------------
+    # CONSTRUIR ARGUMENTOS JOURNALCTL
+    # --------------------------------------------------------
+
+    local -a journal_args=()
+
+    local service
+
+    for service in "${SERVICES[@]}"; do
+        journal_args+=(--unit="$service")
+    done
+
+    # --------------------------------------------------------
+    # EJECUCIÓN
+    # --------------------------------------------------------
 
     set +e
 
     journalctl \
-        --unit="$SERVICE" \
+        "${journal_args[@]}" \
         --follow \
         --lines=0 \
-        --output=cat \
+        --output=json \
         --no-pager |
-    python3 -u -c '
+    python3 -u -c "$(cat <<'PYTHON'
 
 import sys
 import json
+import os
+import shutil
 import textwrap
+import signal
+
 from datetime import datetime
 
 
@@ -221,7 +356,7 @@ from datetime import datetime
 #                     CONFIGURACIÓN
 # ============================================================
 
-SERVICE = sys.argv[1]
+SERVICES = sys.argv[1:]
 
 WIDTH = 58
 LABEL_WIDTH = 25
@@ -241,6 +376,18 @@ WHITE   = "\033[1;37m"
 GRAY    = "\033[0;37m"
 
 USE_COLOR = sys.stdout.isatty()
+USE_SCREEN = sys.stdout.isatty()
+
+EVENT_COUNT = 0
+LAST_SERVICE = "—"
+
+TERMINAL_ROWS = 24
+TERMINAL_COLS = 80
+
+HEADER_HEIGHT = 10
+SCROLL_TOP = HEADER_HEIGHT + 1
+
+STOPPED = False
 
 
 # ============================================================
@@ -309,6 +456,192 @@ SECTION_COLORS = {
 
     "LAST FAILURE ANALYSIS": RED
 }
+
+
+# ============================================================
+#                    FUNCIONES DE TERMINAL
+# ============================================================
+
+def terminal_size():
+
+    global TERMINAL_ROWS
+    global TERMINAL_COLS
+
+    size = shutil.get_terminal_size((80, 24))
+
+    TERMINAL_ROWS = max(12, size.lines)
+    TERMINAL_COLS = max(40, size.columns)
+
+
+def initialize_screen():
+
+    global USE_SCREEN
+    global HEADER_HEIGHT
+    global SCROLL_TOP
+
+    if not USE_SCREEN:
+        return
+
+    terminal_size()
+
+    if TERMINAL_ROWS < 16:
+
+        USE_SCREEN = False
+
+        return
+
+    HEADER_HEIGHT = 10
+    SCROLL_TOP = HEADER_HEIGHT + 1
+
+    sys.stdout.write("\033[?25l")
+    sys.stdout.write("\033[2J")
+    sys.stdout.write("\033[H")
+
+    sys.stdout.write(
+        f"\033[{SCROLL_TOP};{TERMINAL_ROWS}r"
+    )
+
+    sys.stdout.flush()
+
+
+def restore_screen():
+
+    if not USE_SCREEN:
+        return
+
+    try:
+
+        sys.stdout.write("\033[r")
+        sys.stdout.write("\033[?25h")
+        sys.stdout.write("\033[0m")
+        sys.stdout.flush()
+
+    except Exception:
+        pass
+
+
+def terminal_header():
+
+    terminal_size()
+
+    width = min(TERMINAL_COLS, 100)
+
+    service_text = ", ".join(SERVICES)
+
+    if len(service_text) > width - 18:
+
+        service_text = service_text[:width - 21] + "..."
+
+    return [
+
+        color(
+            "HCR SERVER EPRO DEV".center(width),
+            BOLD + CYAN
+        ),
+
+        color(
+            "J S O N   M O N I T O R".center(width),
+            BOLD + MAGENTA
+        ),
+
+        color(
+            "─" * width,
+            DIM + CYAN
+        ),
+
+        color(
+            "●  MONITORIZACIÓN MULTI-SERVICE",
+            GREEN
+        ),
+
+        color(
+            "●  SCRIPT BY. ChristopherAGT",
+            YELLOW
+        ),
+
+        color(
+            "─" * width,
+            DIM + BLUE
+        ),
+
+        color(
+            f"SERVICIOS ({len(SERVICES)}): {service_text}",
+            WHITE
+        ),
+
+        color(
+            f"EVENTOS: {EVENT_COUNT}    ÚLTIMO SERVICIO: {LAST_SERVICE}",
+            CYAN
+        ),
+
+        color(
+            "─" * width,
+            DIM + MAGENTA
+        ),
+
+        color(
+            "ESPERANDO REGISTROS NUEVOS  ·  CTRL+C PARA SALIR",
+            GREEN
+        )
+    ]
+
+
+def update_header():
+
+    if not USE_SCREEN:
+        return
+
+    try:
+
+        sys.stdout.write("\033[s")
+        sys.stdout.write("\033[1;1H")
+
+        for index, content in enumerate(
+            terminal_header(),
+            1
+        ):
+
+            sys.stdout.write(
+                f"\033[{index};1H\033[2K{content}"
+            )
+
+        sys.stdout.write("\033[u")
+
+        sys.stdout.flush()
+
+    except Exception:
+        pass
+
+
+def prepare_event_area():
+
+    if not USE_SCREEN:
+        return
+
+    sys.stdout.write(
+        f"\033[{SCROLL_TOP};1H"
+    )
+
+    sys.stdout.flush()
+
+
+def handle_resize(signum, frame):
+
+    if not USE_SCREEN:
+        return
+
+    try:
+
+        terminal_size()
+
+        sys.stdout.write(
+            f"\033[{SCROLL_TOP};{TERMINAL_ROWS}r"
+        )
+
+        update_header()
+
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -1183,7 +1516,7 @@ def get_severity(category, analysis):
 #                  CONSTRUCCIÓN DEL RESULTADO
 # ============================================================
 
-def build_result(data):
+def build_result(data, service):
 
     category = classify(data)
 
@@ -1227,7 +1560,7 @@ def build_result(data):
 
         "severity": severity,
 
-        "service": SERVICE,
+        "service": service,
 
         "received_at": now(),
 
@@ -1241,7 +1574,7 @@ def build_result(data):
 #                    REGISTROS NO JSON
 # ============================================================
 
-def build_raw_result(line):
+def build_raw_result(line, service):
 
     return {
 
@@ -1251,7 +1584,7 @@ def build_raw_result(line):
 
         "severity": "NOTICE",
 
-        "service": SERVICE,
+        "service": service,
 
         "received_at": now(),
 
@@ -1460,10 +1793,6 @@ def print_pair(label, value, selected=CYAN, indent=2):
 
     prefix = " " * indent
 
-    # --------------------------------------------------------
-    # TIMESTAMPS: ETIQUETA COMPACTA
-    # --------------------------------------------------------
-
     if label in (
         "TIME",
         "RECIBIDO",
@@ -1491,10 +1820,6 @@ def print_pair(label, value, selected=CYAN, indent=2):
 
     label = label[:label_width]
 
-    # --------------------------------------------------------
-    # VALORES CORTOS
-    # --------------------------------------------------------
-
     if len(value) <= value_width:
 
         print(
@@ -1511,10 +1836,6 @@ def print_pair(label, value, selected=CYAN, indent=2):
         )
 
         return
-
-    # --------------------------------------------------------
-    # VALORES EXTENSOS
-    # --------------------------------------------------------
 
     print(
         prefix +
@@ -1551,10 +1872,6 @@ def render_tree(
                 " "
             ).upper()
 
-            # ------------------------------------------------
-            # OBJETOS
-            # ------------------------------------------------
-
             if isinstance(value, dict):
 
                 if not value:
@@ -1588,10 +1905,6 @@ def render_tree(
                     depth + 1,
                     category_color
                 )
-
-            # ------------------------------------------------
-            # LISTAS
-            # ------------------------------------------------
 
             elif isinstance(value, list):
 
@@ -1644,10 +1957,6 @@ def render_tree(
                             item,
                             selected
                         )
-
-            # ------------------------------------------------
-            # VALORES SIMPLES
-            # ------------------------------------------------
 
             else:
 
@@ -1705,10 +2014,6 @@ def render_record(result):
         severity
     )
 
-    # ========================================================
-    # IDENTIFICACIÓN DEL EVENTO
-    # ========================================================
-
     print()
     print_line(selected)
 
@@ -1743,7 +2048,7 @@ def render_record(result):
     )
 
     print_pair(
-        "SERVICIO",
+        "SERVICIO ORIGEN",
         result.get("service"),
         WHITE
     )
@@ -1755,10 +2060,6 @@ def render_record(result):
     )
 
     print_line(selected)
-
-    # ========================================================
-    # ANÁLISIS DEL EVENTO
-    # ========================================================
 
     analysis = result.get(
         "analysis",
@@ -1778,10 +2079,6 @@ def render_record(result):
             analysis,
             category_color=selected
         )
-
-    # ========================================================
-    # DATOS ORIGINALES HCR
-    # ========================================================
 
     original = result.get(
         "data",
@@ -1805,17 +2102,10 @@ def render_record(result):
 
         print_line(MAGENTA)
 
-        # Los valores originales conservan el color
-        # de su categoría, no todo queda en magenta.
-
         render_tree(
             original,
             category_color=selected
         )
-
-    # ========================================================
-    # FIN DEL REGISTRO
-    # ========================================================
 
     print()
     print_line(selected)
@@ -1823,22 +2113,32 @@ def render_record(result):
 
 
 # ============================================================
-#                    PROCESAMIENTO JSON
+#                  PROCESAMIENTO DE MENSAJES
 # ============================================================
 
-def process(line):
+def process_message(message, service):
 
-    line = line.strip()
+    global EVENT_COUNT
+    global LAST_SERVICE
 
-    if not line:
+    message = str(message).strip()
+
+    if not message:
         return
 
-    start = line.find("{")
+    start = message.find("{")
 
     if start < 0:
 
-        result = build_raw_result(line)
+        result = build_raw_result(
+            message,
+            service
+        )
 
+        EVENT_COUNT += 1
+        LAST_SERVICE = service
+
+        update_header()
         render_record(result)
 
         return
@@ -1848,7 +2148,7 @@ def process(line):
         decoder = json.JSONDecoder()
 
         data, _ = decoder.raw_decode(
-            line[start:]
+            message[start:]
         )
 
     except json.JSONDecodeError as error:
@@ -1861,7 +2161,7 @@ def process(line):
 
             "severity": "WARNING",
 
-            "service": SERVICE,
+            "service": service,
 
             "received_at": now(),
 
@@ -1874,10 +2174,14 @@ def process(line):
 
             "data": {
 
-                "raw": line
+                "raw": message
             }
         }
 
+        EVENT_COUNT += 1
+        LAST_SERVICE = service
+
+        update_header()
         render_record(result)
 
         return
@@ -1888,50 +2192,199 @@ def process(line):
             "raw_data": data
         }
 
-    result = build_result(data)
+    result = build_result(
+        data,
+        service
+    )
 
+    EVENT_COUNT += 1
+    LAST_SERVICE = service
+
+    update_header()
     render_record(result)
+
+
+# ============================================================
+#                 PROCESAMIENTO JOURNALD
+# ============================================================
+
+def process_journal_line(line):
+
+    try:
+
+        envelope = json.loads(line)
+
+    except json.JSONDecodeError:
+
+        process_message(
+            line,
+            "SERVICIO_NO_IDENTIFICADO"
+        )
+
+        return
+
+    if not isinstance(envelope, dict):
+
+        process_message(
+            str(envelope),
+            "SERVICIO_NO_IDENTIFICADO"
+        )
+
+        return
+
+    service = envelope.get(
+        "_SYSTEMD_UNIT",
+        "SERVICIO_NO_IDENTIFICADO"
+    )
+
+    message = envelope.get(
+        "MESSAGE",
+        ""
+    )
+
+    # journald puede entregar MESSAGE como una cadena
+    # o como una secuencia de bytes.
+
+    if isinstance(message, list):
+
+        try:
+
+            message = bytes(message).decode(
+                "utf-8",
+                errors="replace"
+            )
+
+        except Exception:
+
+            message = str(message)
+
+    elif not isinstance(message, str):
+
+        message = str(message)
+
+    process_message(
+        message,
+        service
+    )
+
+
+# ============================================================
+#                  ERRORES DE PROCESAMIENTO
+# ============================================================
+
+def render_processing_error(error, service):
+
+    result = {
+
+        "record_type": "MONITOR_ERROR",
+
+        "event": "PROCESSING_ERROR",
+
+        "severity": "ERROR",
+
+        "service": service,
+
+        "received_at": now(),
+
+        "analysis": {
+
+            "error": str(error)
+        }
+    }
+
+    global EVENT_COUNT
+    global LAST_SERVICE
+
+    EVENT_COUNT += 1
+    LAST_SERVICE = service
+
+    update_header()
+    render_record(result)
+
+
+# ============================================================
+#                    INICIALIZACIÓN
+# ============================================================
+
+def initialize():
+
+    initialize_screen()
+
+    if USE_SCREEN:
+
+        update_header()
+
+        prepare_event_area()
+
+    else:
+
+        print()
+        print("HCR SERVER EPRO DEV")
+        print("JSON MONITOR - MULTI-SERVICE")
+        print("Servicios:", ", ".join(SERVICES))
+        print("Esperando eventos...")
+        print()
 
 
 # ============================================================
 #                      BUCLE PRINCIPAL
 # ============================================================
 
-try:
+def main():
 
-    for line in sys.stdin:
+    initialize()
+
+    if USE_SCREEN:
 
         try:
 
-            process(line)
+            signal.signal(
+                signal.SIGWINCH,
+                handle_resize
+            )
 
-        except Exception as error:
+        except Exception:
+            pass
 
-            result = {
+    try:
 
-                "record_type": "MONITOR_ERROR",
+        for line in sys.stdin:
 
-                "event": "PROCESSING_ERROR",
+            if STOPPED:
+                break
 
-                "severity": "ERROR",
+            try:
 
-                "service": SERVICE,
+                process_journal_line(line)
 
-                "received_at": now(),
+            except Exception as error:
 
-                "analysis": {
+                render_processing_error(
+                    error,
+                    "SERVICIO_NO_IDENTIFICADO"
+                )
 
-                    "error": str(error)
-                }
-            }
+    except KeyboardInterrupt:
 
-            render_record(result)
+        pass
 
-except KeyboardInterrupt:
+    finally:
 
-    pass
+        restore_screen()
 
-' "$SERVICE"
+
+if __name__ == "__main__":
+
+    try:
+
+        main()
+
+    except KeyboardInterrupt:
+
+        restore_screen()
+
+PYTHON
+)" "${SERVICES[@]}"
 
     # --------------------------------------------------------
     # ESTADO DE LA TUBERÍA
