@@ -1080,8 +1080,15 @@ select_certificate() {
         warning "No se encontraron certificados compatibles."
 
         printf '\n'
+        edit_line
+        printf '\n'
+    
         printf '  %b[1]%b  Crear un certificado SSL\n' \
             "$GREEN$BOLD" "$RESET"
+    
+        printf '\n'
+        edit_line
+        printf '\n'
 
         printf '  %b[0]%b  Salir\n' \
             "$RED$BOLD" "$RESET"
@@ -1124,8 +1131,11 @@ select_certificate() {
     "$CYAN" "$RESET" "$WHITE$BOLD" "$RESET"
 
     show_certificates
-
+    
     printf '\n'
+    edit_line
+    printf '\n'
+    
     printf '  %b[0]%b  Salir\n' "$RED$BOLD" "$RESET"
 
     printf '\n'
@@ -1989,7 +1999,7 @@ show_menu() {
     printf '  %b[1]%b  Modo solo TLS/SSL' "$GREEN$BOLD" "$RESET"
     printf '  '
     show_option_state "tls"
-    printf '\n\n'
+    printf '\n'
 
     printf '  %b[2]%b  Modo sin y con TLS/SSL' "$CYAN$BOLD" "$RESET"
     printf '  '
