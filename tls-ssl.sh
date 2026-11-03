@@ -18,12 +18,17 @@ KEY_FILE="$TLS_DIR/privkey.pem"
 
 HCR_BIN="/usr/local/lib/hcr-server/hcr-server"
 
+ACME_HOME="/root/.acme.sh"
+ACME_BIN="$ACME_HOME/acme.sh"
+ACME_RELOAD="/usr/local/sbin/hcr-acme-reload"
+
 CERT_PATH=""
 KEY_PATH=""
 BACKUP_DIR=""
 SELECTED_MODE=""
 EXPECTED_HOST=""
 SCAN_TMP=""
+CERTIFICATE_TYPE=""
 MODE_LABEL="MODO MAESTRO"
 
 CERTIFICATES=()
@@ -39,7 +44,6 @@ if [[ -t 1 ]]; then
     RESET='\033[0m'
     BOLD='\033[1m'
     DIM='\033[2m'
-
     RED='\033[1;31m'
     GREEN='\033[1;32m'
     YELLOW='\033[1;33m'
@@ -103,7 +107,6 @@ header() {
     local subtitle="S S L  /  T L S   M A N A G E R"
 
     printf '\n\n'
-
     printf '%*s%bHCR%b %bSERVER%b %bEPRO DEV%b\n' \
         "$(( (width - ${#title}) / 2 ))" '' \
         "$CYAN$BOLD" "$RESET" \
@@ -129,8 +132,6 @@ header() {
     printf '\n'
 }
 
-# -------------------- ENCABEZADO TLS ------------------------
-
 edit_header() {
     clear 2>/dev/null || true
 
@@ -139,7 +140,6 @@ edit_header() {
     local subtitle="C O N F I G U R A C I Ó N"
 
     printf '\n\n'
-
     printf '%*s%bHCR%b %bSERVER%b %bEPRO DEV%b\n' \
         "$(( (width - ${#title}) / 2 ))" '' \
         "$CYAN$BOLD" "$RESET" \
@@ -224,29 +224,20 @@ ask() {
     printf -v "$variable" '%s' "$value"
 }
 
-# -------------------- ENTRADA DE OPCIONES -------------------
-
 OPTION_VALUE=""
 
 read_option() {
     local prompt="$1"
-
     printf '%b' "$prompt"
-
     IFS= read -r OPTION_VALUE
 }
 
 invalid_option() {
     local ignored
 
-    # Mostrar advertencia inmediatamente debajo de la entrada.
     warning "Opción inválida."
-
-    # Esperar ENTER sin mostrar mensajes adicionales.
     IFS= read -r ignored || true
 
-    # Limpiar la línea de espera, la advertencia
-    # y la entrada anterior.
     if [[ -t 0 && -t 1 ]]; then
         printf '\033[1A\r\033[2K'
         printf '\033[1A\r\033[2K'
@@ -263,7 +254,7 @@ check_requirements() {
         systemctl openssl python3 awk grep sed \
         find install cp rm date mktemp chmod chown \
         sha256sum cut hostname basename dirname sleep mv \
-        sort stat
+        sort stat curl getent ss
     do
         if ! command -v "$command" >/dev/null 2>&1; then
             error "Falta una dependencia: $command"
@@ -291,7 +282,6 @@ detect_services() {
     local file
 
     SERVICES=()
-
     shopt -s nullglob
 
     for file in "$SERVICE_DIR/${SERVICE_PREFIX}"*.service; do
@@ -322,7 +312,6 @@ import re
 import sys
 
 path, name = sys.argv[1:3]
-
 pattern = re.compile(
     r'(?<!\S)-{1,2}' + re.escape(name) +
     r'(?:=|\s+)(?:"([^"]*)"|\'([^\']*)\'|([^\s]+))'
@@ -370,7 +359,6 @@ import re
 import sys
 
 name, value = sys.argv[1:3]
-
 pattern = re.compile(
     r'(?<!\S)-{1,2}' + re.escape(name) +
     r'(?:=|\s+)(?:"([^"]*)"|\'([^\']*)\'|([^\s;]+))'
@@ -383,7 +371,6 @@ for match in pattern.finditer(value):
         (part for part in match.groups() if part is not None),
         None
     )
-
     if item is not None:
         matches.append(item)
 
@@ -394,14 +381,9 @@ print(matches[0])
 PY
 }
 
-# -------------------- ESTADO GLOBAL -------------------------
-
 get_global_transport() {
-    local file
-    local transport
-    local first=""
-    local initialized=0
-    local different=0
+    local file transport first=""
+    local initialized=0 different=0
 
     for file in "${SERVICES[@]}"; do
         transport="$(get_transport "$file")"
@@ -422,9 +404,7 @@ get_global_transport() {
 }
 
 get_global_activity() {
-    local file
-    local active=0
-    local inactive=0
+    local file active=0 inactive=0
 
     for file in "${SERVICES[@]}"; do
         if systemctl is-active --quiet "$(basename "$file")"; then
@@ -445,49 +425,27 @@ get_global_activity() {
 
 show_services() {
     local count="${#SERVICES[@]}"
-    local transport
-    local label
-    local color
-    local width=56
-    local left_text
-    local right_text
-    local spaces
+    local transport label color
+    local width=56 left_text right_text spaces
 
     transport="$(get_global_transport)"
 
     case "$transport" in
-        tls)
-            label="ACTUAL: TLS"
-            color="$GREEN$BOLD"
-            ;;
-        auto)
-            label="ACTUAL: AUTO"
-            color="$CYAN$BOLD"
-            ;;
-        plain)
-            label="ACTUAL: PLAIN"
-            color="$RED$BOLD"
-            ;;
-        mixed)
-            label="ACTUAL: MIXED"
-            color="$YELLOW$BOLD"
-            ;;
-        *)
-            label="ACTUAL: N/D"
-            color="$YELLOW$BOLD"
-            ;;
+        tls) label="ACTUAL: TLS"; color="$GREEN$BOLD" ;;
+        auto) label="ACTUAL: AUTO"; color="$CYAN$BOLD" ;;
+        plain) label="ACTUAL: PLAIN"; color="$RED$BOLD" ;;
+        mixed) label="ACTUAL: MIXED"; color="$YELLOW$BOLD" ;;
+        *) label="ACTUAL: N/D"; color="$YELLOW$BOLD" ;;
     esac
 
     left_text="Servicios detectados: $count"
     right_text="$label"
-
     spaces=$(( width - ${#left_text} - ${#right_text} - 4 ))
     (( spaces < 1 )) && spaces=1
 
     printf '  %b%s%b%*s%b%s%b  \n' \
         "$GRAY" "$left_text" "$RESET" \
-        "$spaces" '' \
-        "$color" "$right_text" "$RESET"
+        "$spaces" '' "$color" "$right_text" "$RESET"
 }
 
 # ============================================================
@@ -505,19 +463,13 @@ certificate_hash() {
 private_key_hash() {
     local key="$1"
 
-    openssl pkey \
-        -in "$key" \
-        -passin pass: \
-        -pubout \
-        -outform DER 2>/dev/null |
+    openssl pkey -in "$key" -passin pass: -pubout -outform DER 2>/dev/null |
         sha256sum | awk '{print $1}'
 }
 
 validate_dates() {
     local cert="$1"
-    local start
-    local end
-    local now
+    local start end now
 
     start="$(openssl x509 -in "$cert" -noout -startdate 2>/dev/null)"
     end="$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null)"
@@ -531,35 +483,25 @@ validate_dates() {
     end="$(date -u -d "$end" +%s 2>/dev/null)" || return 1
     now="$(date -u +%s)"
 
-    (( now >= start )) || return 1
-    (( now <= end )) || return 1
-
-    return 0
+    (( now >= start && now <= end ))
 }
 
 validate_server_certificate() {
     local cert="$1"
-    local extensions
-    local eku
-    local san
+    local extensions eku san
 
     openssl x509 -in "$cert" -noout >/dev/null 2>&1 || return 1
 
     extensions="$(openssl x509 -in "$cert" -noout -ext basicConstraints 2>/dev/null || true)"
-
-    if grep -qi 'CA:TRUE' <<<"$extensions"; then
-        return 1
-    fi
+    grep -qi 'CA:TRUE' <<<"$extensions" && return 1
 
     eku="$(openssl x509 -in "$cert" -noout -ext extendedKeyUsage 2>/dev/null || true)"
-
     if [[ -n "$eku" ]] &&
        ! grep -Eqi 'TLS Web Server Authentication|serverAuth' <<<"$eku"; then
         return 1
     fi
 
     san="$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null || true)"
-
     grep -q 'Subject Alternative Name' <<<"$san" || return 1
 
     return 0
@@ -572,9 +514,7 @@ validate_hostname_match() {
     [[ -z "$hostname" ]] && return 0
 
     if python3 - "$hostname" <<'PY'
-import ipaddress
-import sys
-
+import ipaddress, sys
 try:
     ipaddress.ip_address(sys.argv[1])
     sys.exit(0)
@@ -589,41 +529,100 @@ PY
 }
 
 extract_leaf_certificate() {
-    local cert="$1"
-    local output="$2"
-
-    openssl x509 -in "$cert" -out "$output" 2>/dev/null
+    openssl x509 -in "$1" -out "$2" 2>/dev/null
 }
 
 validate_chain() {
     local cert="$1"
-    local leaf="$SCAN_TMP/leaf-$$.pem"
+    local leaf
 
-    extract_leaf_certificate "$cert" "$leaf" || return 1
+    leaf="$(mktemp /tmp/hcr-tls-leaf.XXXXXXXX)" || return 1
 
-    openssl verify \
+    if ! extract_leaf_certificate "$cert" "$leaf"; then
+        rm -f "$leaf"
+        return 1
+    fi
+
+    if openssl verify \
         -purpose sslserver \
         -CApath /etc/ssl/certs \
         -untrusted "$cert" \
-        "$leaf" >/dev/null 2>&1
+        "$leaf" >/dev/null 2>&1; then
+        rm -f "$leaf"
+        return 0
+    fi
+
+    rm -f "$leaf"
+    return 1
 }
+
+# ------------------------------------------------------------
+# VALIDACIÓN DE CERTIFICADOS AUTOFIRMADOS
+# ------------------------------------------------------------
+
+validate_self_signed_chain() {
+    local cert="$1"
+    local leaf=""
+    local issuer=""
+    local subject=""
+    local result=1
+
+    leaf="$(mktemp /tmp/hcr-tls-selfsigned.XXXXXXXX)" || return 1
+
+    if ! extract_leaf_certificate "$cert" "$leaf"; then
+        rm -f "$leaf"
+        return 1
+    fi
+
+    issuer="$(
+        openssl x509 -in "$leaf" -noout -issuer -nameopt RFC2253 2>/dev/null
+    )" || {
+        rm -f "$leaf"
+        return 1
+    }
+
+    subject="$(
+        openssl x509 -in "$leaf" -noout -subject -nameopt RFC2253 2>/dev/null
+    )" || {
+        rm -f "$leaf"
+        return 1
+    }
+
+    # El emisor y el titular deben coincidir.
+    if [[ "${issuer#issuer=}" != "${subject#subject=}" ]]; then
+        rm -f "$leaf"
+        return 1
+    fi
+
+    # Verifica criptográficamente la firma autofirmada.
+    if openssl verify \
+        -check_ss_sig \
+        -purpose sslserver \
+        -CAfile "$leaf" \
+        "$leaf" >/dev/null 2>&1; then
+        result=0
+    fi
+
+    rm -f "$leaf"
+    return "$result"
+}
+
+# ------------------------------------------------------------
+# VALIDACIÓN GENERAL
+# ------------------------------------------------------------
 
 validate_certificate() {
     local cert="$1"
     local key="$2"
     local expected="${3:-}"
-    local cert_hash
-    local key_hash
+    local certificate_type="${4:-acme}"
+    local cert_hash key_hash
 
     [[ -f "$cert" && -r "$cert" ]] || return 1
     [[ -f "$key" && -r "$key" ]] || return 1
 
     openssl x509 -in "$cert" -noout >/dev/null 2>&1 || return 1
-
-    openssl pkey \
-        -in "$key" \
-        -passin pass: \
-        -noout >/dev/null 2>&1 || return 1
+    openssl pkey -in "$key" -passin pass: -noout >/dev/null 2>&1 || return 1
 
     validate_server_certificate "$cert" || return 1
     validate_dates "$cert" || return 1
@@ -634,7 +633,17 @@ validate_certificate() {
 
     [[ -n "$cert_hash" && "$cert_hash" == "$key_hash" ]] || return 1
 
-    validate_chain "$cert" || return 1
+    case "$certificate_type" in
+        acme)
+            validate_chain "$cert" || return 1
+            ;;
+        selfsigned)
+            validate_self_signed_chain "$cert" || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 
     return 0
 }
@@ -643,17 +652,14 @@ show_certificate_info() {
     local cert="$1"
 
     printf '\n'
-
     printf '  %bTitular:%b\n' "$GRAY" "$RESET"
     openssl x509 -in "$cert" -noout -subject -nameopt multiline 2>/dev/null
 
     printf '\n'
-
     printf '  %bEmisor:%b\n' "$GRAY" "$RESET"
     openssl x509 -in "$cert" -noout -issuer -nameopt multiline 2>/dev/null
 
     printf '\n'
-
     printf '  %bVálido desde:%b ' "$GRAY" "$RESET"
     openssl x509 -in "$cert" -noout -startdate 2>/dev/null | cut -d= -f2-
 
@@ -661,11 +667,9 @@ show_certificate_info() {
     openssl x509 -in "$cert" -noout -enddate 2>/dev/null | cut -d= -f2-
 
     printf '\n'
-
     printf '  %bDominios SAN:%b\n' "$GRAY" "$RESET"
     openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null |
         sed '1d' | sed 's/^/      /'
-
     printf '\n'
 }
 
@@ -674,22 +678,14 @@ show_certificate_info() {
 # ============================================================
 
 scan_private_keys() {
-    local directory
-    local file
-    local hash
+    local directory file hash
 
     KEY_HASHES=()
     KEY_SEEN=()
 
     local directories=(
-        /etc
-        /root
-        /home
-        /usr/local
-        /opt
-        /var/lib
-        /var/www
-        /srv
+        /etc /root /home /usr/local /opt
+        /var/lib /var/www /srv
     )
 
     for directory in "${directories[@]}"; do
@@ -706,15 +702,11 @@ scan_private_keys() {
                 KEY_HASHES["$hash"]="$file"
                 KEY_SEEN["$file"]=1
             fi
-
         done < <(
             find -L "$directory" -maxdepth 10 -type f \
-                \( -iname '*.key' \
-                -o -iname '*.pem' \
-                -o -iname '*.p8' \
-                -o -iname '*.pk8' \
-                -o -iname '*.priv' \
-                -o -iname 'privkey' \
+                \( -iname '*.key' -o -iname '*.pem' \
+                -o -iname '*.p8' -o -iname '*.pk8' \
+                -o -iname '*.priv' -o -iname 'privkey' \
                 -o -iname 'private' \) \
                 -print0 2>/dev/null
         )
@@ -722,28 +714,17 @@ scan_private_keys() {
 }
 
 scan_certificates() {
-    local directory
-    local cert
-    local hash
-    local key
-    local pair
+    local directory cert hash key pair cert_type
 
     CERTIFICATES=()
     CERT_SEEN=()
 
     local directories=(
-        /etc
-        /root
-        /home
-        /usr/local
-        /opt
-        /var/lib
-        /var/www
-        /srv
+        /etc /root /home /usr/local /opt
+        /var/lib /var/www /srv
     )
 
     cleanup
-
     SCAN_TMP="$(mktemp -d /tmp/hcr-tls-scan.XXXXXXXX)" || return 1
     chmod 700 "$SCAN_TMP"
 
@@ -762,26 +743,30 @@ scan_certificates() {
 
             hash="$(certificate_hash "$cert" 2>/dev/null || true)"
             [[ -n "$hash" ]] || continue
-
             [[ -n "${CERT_SEEN[$hash]+x}" ]] && continue
 
             key="${KEY_HASHES[$hash]:-}"
             [[ -n "$key" ]] || continue
 
-            if ! validate_certificate "$cert" "$key" "$EXPECTED_HOST"; then
+            # Primero se intenta validar como certificado público.
+            if validate_certificate "$cert" "$key" "$EXPECTED_HOST" "acme"; then
+                cert_type="acme"
+
+            # Si no tiene cadena pública, se comprueba si es autofirmado.
+            elif validate_certificate "$cert" "$key" "$EXPECTED_HOST" "selfsigned"; then
+                cert_type="selfsigned"
+            else
                 continue
             fi
 
-            pair="$cert|$key"
+            pair="$cert|$key|$cert_type"
             CERTIFICATES+=("$pair")
             CERT_SEEN["$hash"]="$cert"
 
         done < <(
             find -L "$directory" -maxdepth 10 -type f \
-                \( -iname '*.pem' \
-                -o -iname '*.crt' \
-                -o -iname '*.cer' \
-                -o -iname '*.cert' \) \
+                \( -iname '*.pem' -o -iname '*.crt' \
+                -o -iname '*.cer' -o -iname '*.cert' \) \
                 -print0 2>/dev/null
         )
     done
@@ -793,34 +778,19 @@ certificate_label() {
     local cert="$1"
 
     python3 - "$cert" <<'PY'
-import re
-import subprocess
-import sys
-
-cert = sys.argv[1]
+import re, subprocess, sys
 
 try:
     output = subprocess.check_output(
-        [
-            "openssl",
-            "x509",
-            "-in", cert,
-            "-noout",
-            "-ext", "subjectAltName"
-        ],
+        ["openssl", "x509", "-in", sys.argv[1],
+         "-noout", "-ext", "subjectAltName"],
         stderr=subprocess.DEVNULL,
         text=True
     )
-
-    names = re.findall(
-        r'(?:DNS|IP Address):([^,\s]+)',
-        output
-    )
-
+    names = re.findall(r'(?:DNS|IP Address):([^,\s]+)', output)
     if names:
         print(names[0])
         sys.exit(0)
-
 except Exception:
     pass
 
@@ -829,34 +799,34 @@ PY
 }
 
 show_certificates() {
-    local entry
-    local cert
-    local label
-    local index=0
+    local entry cert label cert_type index=0
 
     for entry in "${CERTIFICATES[@]}"; do
         cert="${entry%%|*}"
+        cert_type="${entry##*|}"
         label="$(certificate_label "$cert")"
-
         index=$((index + 1))
 
-        printf '  %b[%s]%b  %b%s%b\n' \
-            "$CYAN$BOLD" "$index" "$RESET" \
-            "$WHITE" "$label" "$RESET"
+        printf '  %b[%s]%b  %b%s%b' \
+            "$CYAN$BOLD" "$index" "$RESET" "$WHITE" "$label" "$RESET"
+
+        if [[ "$cert_type" == "selfsigned" ]]; then
+            printf '  %b[AUTOFIRMADO]%b' "$YELLOW" "$RESET"
+        else
+            printf '  %b[ACME / CA]%b' "$GREEN" "$RESET"
+        fi
+
+        printf '\n'
     done
 }
 
 # ============================================================
-#                 CERTIFICADOS AUTOFIRMADOS
+#              VALIDACIÓN DE DOMINIOS Y CORREO
 # ============================================================
 
 validate_hostname() {
-    local hostname="$1"
-
-    python3 - "$hostname" <<'PY'
-import ipaddress
-import re
-import sys
+    python3 - "$1" <<'PY'
+import ipaddress, re, sys
 
 value = sys.argv[1]
 
@@ -874,16 +844,26 @@ if not re.fullmatch(
     value
 ):
     sys.exit(1)
+
+if "." not in value:
+    sys.exit(1)
+PY
+}
+
+validate_email() {
+    python3 - "$1" <<'PY'
+import re, sys
+value = sys.argv[1]
+if not value:
+    sys.exit(0)
+if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', value):
+    sys.exit(1)
 PY
 }
 
 get_san_type() {
-    local hostname="$1"
-
-    python3 - "$hostname" <<'PY'
-import ipaddress
-import sys
-
+    python3 - "$1" <<'PY'
+import ipaddress, sys
 try:
     ipaddress.ip_address(sys.argv[1])
     print("IP")
@@ -892,18 +872,92 @@ except ValueError:
 PY
 }
 
-create_self_signed() {
-    local hostname
-    local san_type
-    local subject
-    local timestamp
+# ============================================================
+#          INSTALACIÓN SEGURA DE CERTIFICADOS
+# ============================================================
+
+install_certificate_pair() {
+    local source_cert="$1"
+    local source_key="$2"
+    local hostname="$3"
+    local certificate_type="${4:-acme}"
     local temp_cert=""
     local temp_key=""
-    local old_cert=""
-    local old_key=""
+
+    install -d -o root -g root -m 700 "$TLS_DIR" || return 1
+
+    temp_cert="$(mktemp "$TLS_DIR/.fullchain.XXXXXXXX")" || return 1
+    temp_key="$(mktemp "$TLS_DIR/.privkey.XXXXXXXX")" || {
+        rm -f "$temp_cert"
+        return 1
+    }
+
+    if ! cp "$source_cert" "$temp_cert" ||
+       ! cp "$source_key" "$temp_key"; then
+        rm -f "$temp_cert" "$temp_key"
+        return 1
+    fi
+
+    chmod 644 "$temp_cert"
+    chmod 600 "$temp_key"
+    chown root:root "$temp_cert" "$temp_key"
+
+    if ! validate_certificate "$temp_cert" "$temp_key" "$hostname" "$certificate_type"; then
+        rm -f "$temp_cert" "$temp_key"
+        return 1
+    fi
+
+    # Respaldo de archivos anteriores.
+    local timestamp
+    timestamp="$(date '+%Y%m%d-%H%M%S')"
+
+    if [[ -e "$CERT_FILE" ]]; then
+        cp -a "$CERT_FILE" "$TLS_DIR/fullchain.pem.previous-$timestamp" || {
+            rm -f "$temp_cert" "$temp_key"
+            return 1
+        }
+    fi
+
+    if [[ -e "$KEY_FILE" ]]; then
+        cp -a "$KEY_FILE" "$TLS_DIR/privkey.pem.previous-$timestamp" || {
+            rm -f "$temp_cert" "$temp_key"
+            return 1
+        }
+    fi
+
+    if ! mv -f "$temp_cert" "$CERT_FILE"; then
+        rm -f "$temp_cert" "$temp_key"
+        return 1
+    fi
+
+    if ! mv -f "$temp_key" "$KEY_FILE"; then
+        rm -f "$temp_key"
+        return 1
+    fi
+
+    chmod 644 "$CERT_FILE"
+    chmod 600 "$KEY_FILE"
+    chown root:root "$CERT_FILE" "$KEY_FILE"
+
+    CERT_PATH="$CERT_FILE"
+    KEY_PATH="$KEY_FILE"
+    EXPECTED_HOST="$hostname"
+    CERTIFICATE_TYPE="$certificate_type"
+
+    return 0
+}
+
+# ============================================================
+#              CERTIFICADOS AUTOFIRMADOS
+# ============================================================
+
+create_self_signed() {
+    local hostname san_type subject
+    local temp_cert="" temp_key=""
     local answer
 
     edit_header
+    printf '\033[1A\033[2K'
     section "CREAR CERTIFICADO AUTOFIRMADO"
 
     info "Vigencia: 365 días."
@@ -917,71 +971,64 @@ create_self_signed() {
     ask "  ${CYAN}Dominio o IP del servidor:${RESET} " \
         "$(hostname -f 2>/dev/null || hostname)" hostname || return 1
 
-    if ! validate_hostname "$hostname"; then
+        if ! validate_hostname "$hostname"; then
         error "Dominio o IP no válido."
         return 1
     fi
 
-    san_type="$(get_san_type "$hostname")"
-    subject="/CN=$hostname"
+    # --------------------------------------------------------
+    # VALIDAR QUE EL DOMINIO O IP PERTENEZCA AL VPS
+    # --------------------------------------------------------
 
-    if ! install -d -o root -g root -m 700 "$TLS_DIR"; then
-        error "No se pudo preparar el directorio TLS."
+    printf '\n'
+    edit_line
+    section "VERIFICACIÓN DEL DOMINIO / IP"
+
+    info "Destino: $hostname"
+
+    if ! validate_host_points_to_server "$hostname"; then
+        warning "No se puede continuar con la generación."
+        warning "El dominio o IP debe coincidir con el VPS."
         return 1
     fi
 
-    timestamp="$(date '+%Y%m%d-%H%M%S')"
+    success "Validación del destino superada."
+
+    san_type="$(get_san_type "$hostname")"
+    subject="/CN=$hostname"
+
+    install -d -o root -g root -m 700 "$TLS_DIR" || {
+        error "No se pudo preparar el directorio TLS."
+        return 1
+    }
 
     if [[ -e "$CERT_FILE" || -e "$KEY_FILE" ]]; then
         warning "Ya existen archivos en el directorio TLS."
-
         printf '\n'
         printf '  %b[1]%b  Respaldar y reemplazar\n' "$GREEN$BOLD" "$RESET"
-        printf '  %b[0]%b  Cancelar\n' "$RED$BOLD" "$RESET"
-        printf '\n'
+        printf '  %b[0]%b  Cancelar\n\n' "$RED$BOLD" "$RESET"
 
         while true; do
-            if ! read_option \
-                "  ${CYAN}${BOLD}Selecciona una opción:${RESET} "; then
-                return 1
-            fi
-
+            read_option "  ${CYAN}${BOLD}Selecciona una opción:${RESET} " || return 1
             answer="$OPTION_VALUE"
 
             case "$answer" in
-                1)
-                    break
-                    ;;
-                0)
-                    return 2
-                    ;;
-                *)
-                    invalid_option
-                    ;;
+                1) break ;;
+                0) return 2 ;;
+                *) invalid_option ;;
             esac
         done
-
-        if [[ -e "$CERT_FILE" ]]; then
-            old_cert="$TLS_DIR/fullchain.pem.previous-$timestamp"
-            cp -a "$CERT_FILE" "$old_cert" || return 1
-        fi
-
-        if [[ -e "$KEY_FILE" ]]; then
-            old_key="$TLS_DIR/privkey.pem.previous-$timestamp"
-            cp -a "$KEY_FILE" "$old_key" || return 1
-        fi
     fi
 
-    temp_cert="$(mktemp "$TLS_DIR/.fullchain.XXXXXXXX")" || return 1
-
-    temp_key="$(mktemp "$TLS_DIR/.privkey.XXXXXXXX")" || {
+    temp_cert="$(mktemp "$TLS_DIR/.selfsigned-cert.XXXXXXXX")" || return 1
+    temp_key="$(mktemp "$TLS_DIR/.selfsigned-key.XXXXXXXX")" || {
         rm -f "$temp_cert"
         return 1
     }
 
     chmod 600 "$temp_cert" "$temp_key"
 
-    if ! spinner "Generando certificado SSL/TLS" \
+    if ! spinner "Generando certificado autofirmado" \
         openssl req -x509 -newkey rsa:2048 -nodes \
         -keyout "$temp_key" \
         -out "$temp_cert" \
@@ -1001,26 +1048,444 @@ create_self_signed() {
        [[ "$(certificate_hash "$temp_cert")" != "$(private_key_hash "$temp_key")" ]] ||
        ! validate_dates "$temp_cert" ||
        ! validate_server_certificate "$temp_cert" ||
-       ! validate_hostname_match "$temp_cert" "$hostname"
-    then
+       ! validate_hostname_match "$temp_cert" "$hostname" ||
+       ! validate_self_signed_chain "$temp_cert"; then
         rm -f "$temp_cert" "$temp_key"
         error "Falló la validación del certificado generado."
         return 1
     fi
 
-    chmod 644 "$temp_cert"
-    chmod 600 "$temp_key"
-    chown root:root "$temp_cert" "$temp_key"
-
-    if ! mv -f "$temp_cert" "$CERT_FILE"; then
+    # Se instala utilizando el tipo selfsigned.
+    if ! install_certificate_pair "$temp_cert" "$temp_key" "$hostname" "selfsigned"; then
         rm -f "$temp_cert" "$temp_key"
-        error "No se pudo instalar el certificado."
+        error "No se pudo instalar el certificado generado."
         return 1
     fi
 
-    if ! mv -f "$temp_key" "$KEY_FILE"; then
-        rm -f "$temp_key"
-        error "No se pudo instalar la clave privada."
+    rm -f "$temp_cert" "$temp_key"
+
+    success "Certificado autofirmado creado correctamente."
+    info "Certificado: $CERT_PATH"
+    info "Clave privada: $KEY_PATH"
+    warning "Un certificado autofirmado no tendrá confianza pública automática."
+    warning "Los clientes deberán confiar expresamente en él."
+
+    return 0
+}
+
+# ============================================================
+#                 ADMINISTRACIÓN ACME
+# ============================================================
+
+get_public_ipv4() {
+    local ip=""
+
+    ip="$(curl -4fsS --connect-timeout 8 --max-time 15 https://api.ipify.org 2>/dev/null || true)"
+
+    if [[ -z "$ip" ]]; then
+        ip="$(curl -4fsS --connect-timeout 8 --max-time 15 https://icanhazip.com 2>/dev/null || true)"
+    fi
+
+    python3 - "$ip" <<'PY'
+import ipaddress, sys
+try:
+    ip = ipaddress.ip_address(sys.argv[1].strip())
+    if ip.version != 4 or ip.is_private or ip.is_loopback:
+        sys.exit(1)
+    print(ip)
+except Exception:
+    sys.exit(1)
+PY
+}
+
+get_domain_ipv4() {
+    local domain="$1"
+
+    getent ahostsv4 "$domain" 2>/dev/null |
+        awk '{print $1}' |
+        sort -u
+}
+
+get_public_ipv6() {
+    local ip=""
+
+    ip="$(curl -6fsS --connect-timeout 8 --max-time 15 \
+        https://api6.ipify.org 2>/dev/null || true)"
+
+    python3 - "$ip" <<'PY'
+import ipaddress, sys
+
+try:
+    ip = ipaddress.ip_address(sys.argv[1].strip())
+    if ip.version != 6 or not ip.is_global:
+        sys.exit(1)
+    print(ip)
+except Exception:
+    sys.exit(1)
+PY
+}
+
+get_server_public_ips() {
+    local ipv4="" ipv6=""
+
+    ipv4="$(get_public_ipv4 2>/dev/null || true)"
+    ipv6="$(get_public_ipv6 2>/dev/null || true)"
+
+    [[ -n "$ipv4" ]] && printf '%s\n' "$ipv4"
+    [[ -n "$ipv6" ]] && printf '%s\n' "$ipv6"
+}
+
+get_domain_ips() {
+    local domain="$1"
+
+    {
+        getent ahostsv4 "$domain" 2>/dev/null || true
+        getent ahostsv6 "$domain" 2>/dev/null || true
+    } |
+    awk '{print $1}' |
+    python3 -c '
+import ipaddress
+import sys
+
+ips = set()
+
+for line in sys.stdin:
+    raw = line.strip()
+
+    try:
+        ip = ipaddress.ip_address(raw)
+
+        # Convertir IPv4 mapeadas en IPv6 a IPv4 normal.
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+
+        ips.add(str(ip))
+    except ValueError:
+        continue
+
+for ip in sorted(ips):
+    print(ip)
+'
+}
+
+validate_host_points_to_server() {
+    local hostname="$1"
+    local server_ips=""
+    local domain_ips=""
+    local ip=""
+    local is_ip=0
+    local matched=0
+
+    server_ips="$(get_server_public_ips)"
+
+    if [[ -z "$server_ips" ]]; then
+        error "No se pudieron detectar las IP públicas del VPS."
+        return 1
+    fi
+
+    # Detectar si la entrada es una dirección IP.
+    if python3 - "$hostname" <<'PY'
+import ipaddress, sys
+
+try:
+    ipaddress.ip_address(sys.argv[1])
+    sys.exit(0)
+except ValueError:
+    sys.exit(1)
+PY
+    then
+        is_ip=1
+    fi
+
+    # --------------------------------------------------------
+    # VALIDACIÓN DIRECTA DE IPv4 / IPv6
+    # --------------------------------------------------------
+
+    if (( is_ip )); then
+        if grep -Fxq "$hostname" <<<"$server_ips"; then
+            success "La dirección IP coincide con el VPS."
+            return 0
+        fi
+
+        error "La dirección IP introducida no pertenece al VPS."
+        info "IP introducida: $hostname"
+        info "IP públicas detectadas: $(tr '\n' ' ' <<<"$server_ips")"
+        return 1
+    fi
+
+    # --------------------------------------------------------
+    # VALIDACIÓN DNS A / AAAA
+    # --------------------------------------------------------
+
+    domain_ips="$(get_domain_ips "$hostname")"
+
+    if [[ -z "$domain_ips" ]]; then
+        error "El dominio no tiene registros DNS resolubles."
+        return 1
+    fi
+
+    info "IP públicas del VPS: $(tr '\n' ' ' <<<"$server_ips")"
+    info "IP del dominio: $(tr '\n' ' ' <<<"$domain_ips")"
+
+    while IFS= read -r ip; do
+        [[ -n "$ip" ]] || continue
+
+        if grep -Fxq "$ip" <<<"$server_ips"; then
+            matched=1
+        else
+            error "Se encontró una IP DNS que no pertenece al VPS."
+            info "IP no coincidente: $ip"
+            return 1
+        fi
+    done <<<"$domain_ips"
+
+    if (( matched == 0 )); then
+        error "Ninguna IP del dominio coincide con el VPS."
+        return 1
+    fi
+
+    success "Las direcciones DNS coinciden con el VPS."
+    return 0
+}
+
+check_port_80() {
+    ! ss -H -ltn '( sport = :80 )' 2>/dev/null | grep -q .
+}
+
+install_acme_client() {
+    if [[ -x "$ACME_BIN" ]]; then
+        return 0
+    fi
+
+    info "Instalando cliente ACME..."
+
+    if ! curl -fsSL https://get.acme.sh | sh -s email="$ACME_EMAIL"; then
+        error "No se pudo instalar acme.sh."
+        return 1
+    fi
+
+    [[ -x "$ACME_BIN" ]] || {
+        error "No se encontró el ejecutable acme.sh después de instalarlo."
+        return 1
+    }
+
+    return 0
+}
+
+create_acme_reload_hook() {
+    local temp_hook
+
+    temp_hook="$(mktemp /tmp/hcr-acme-hook.XXXXXXXX)" || return 1
+
+    cat > "$temp_hook" <<'HOOK'
+#!/usr/bin/env bash
+set -u
+
+SERVICE_DIR="/etc/systemd/system"
+SERVICE_PREFIX="hcr-server"
+
+shopt -s nullglob
+
+for unit in "$SERVICE_DIR/${SERVICE_PREFIX}"*.service; do
+    [[ -f "$unit" ]] || continue
+
+    # Solo reiniciar servicios que utilizan TLS o AUTO
+    # y que apuntan a los certificados administrados por HCR.
+    if grep -Eq -- '--transport(=|[[:space:]])(tls|auto)([[:space:]]|$)' "$unit" &&
+       grep -Fq -- '--tls-cert=/etc/hcr-server/tls/fullchain.pem' "$unit" &&
+       grep -Fq -- '--tls-key=/etc/hcr-server/tls/privkey.pem' "$unit"; then
+        systemctl restart "$(basename "$unit")" >/dev/null 2>&1 || true
+    fi
+done
+
+exit 0
+HOOK
+
+    install -o root -g root -m 700 "$temp_hook" "$ACME_RELOAD"
+    local status=$?
+    rm -f "$temp_hook"
+
+    return "$status"
+}
+
+acme_http01() {
+    local domain=""
+    local public_ip=""
+    local dns_ips=""
+    local email=""
+    local answer=""
+    local acme_cert=""
+    local acme_key=""
+    local acme_fullchain=""
+    local acme_args=()
+
+    ACME_EMAIL=""
+
+    edit_header
+    printf '\033[1A\033[2K'
+    section "CERTIFICADO ACME HTTP-01"
+
+    info "Autoridad certificadora: Let's Encrypt"
+    info "Validación: HTTP-01"
+    info "Puerto requerido: 80"
+    info "Renovación: automática"
+
+    printf '\n'
+    edit_line
+    printf '\n'
+
+    ask "  ${CYAN}Introduce el subdominio:${RESET} " "" domain || return 1
+    domain="${domain,,}"
+
+    if ! validate_hostname "$domain"; then
+        error "El nombre de dominio no es válido."
+        return 1
+    fi
+
+    # Let's Encrypt necesita un identificador DNS, no una IP.
+    if [[ "$(get_san_type "$domain")" == "IP" ]]; then
+        error "ACME HTTP-01 requiere un nombre de dominio DNS."
+        return 1
+    fi
+
+    warning "Se comprobará la resolución DNS antes de emitir el certificado."
+
+    printf '\n'
+    edit_line
+    section "VERIFICACIÓN DEL DOMINIO"
+
+    info "Dominio: $domain"
+
+    public_ip="$(get_public_ipv4)" || {
+        error "No se pudo detectar la IP pública IPv4 del VPS."
+        return 1
+    }
+
+    dns_ips="$(get_domain_ipv4 "$domain")"
+
+    info "IP pública del VPS: $public_ip"
+
+    if [[ -z "$dns_ips" ]]; then
+        error "El dominio no tiene un registro A resoluble."
+        return 1
+    fi
+
+    info "IP A del dominio: $(tr '\n' ' ' <<<"$dns_ips")"
+
+    # Se exige que todas las direcciones A resueltas coincidan.
+    if [[ "$(printf '%s\n' "$dns_ips" | grep -cxF "$public_ip")" -eq 0 ]] ||
+       [[ "$(printf '%s\n' "$dns_ips" | grep -vFx "$public_ip" | wc -l)" -gt 0 ]]; then
+        error "La resolución DNS no coincide con la IP pública del VPS."
+        warning "Corrige el registro A antes de solicitar el certificado."
+        return 1
+    fi
+
+    success "La dirección IP del dominio coincide con el VPS."
+    success "Verificación DNS superada."
+
+    if ! check_port_80; then
+        error "El puerto 80 está ocupado."
+        warning "Detén temporalmente el servicio que lo utiliza."
+        return 1
+    fi
+
+    success "Puerto 80 disponible."
+
+    warning "HTTP-01 necesita que el puerto 80 sea accesible desde Internet."
+    warning "En Cloudflare utiliza DNS only durante la emisión."
+
+    printf '\n'
+    edit_line
+    printf '\n'
+
+    ask "  ${CYAN}Correo de contacto (opcional):${RESET} " "" email || return 1
+
+    if ! validate_email "$email"; then
+        error "La dirección de correo no tiene un formato válido."
+        return 1
+    fi
+
+    ACME_EMAIL="$email"
+
+    if ! install_acme_client; then
+        return 1
+    fi
+
+    if [[ -n "$email" ]]; then
+        "$ACME_BIN" --register-account -m "$email" --server letsencrypt >/dev/null 2>&1 || {
+            warning "No se pudo registrar el correo; se continuará con la emisión."
+        }
+    fi
+
+    section "EMISIÓN DEL CERTIFICADO"
+
+    info "Dominio: $domain"
+    info "Algoritmo: ECC 256 bits"
+    info "Método: standalone HTTP-01"
+
+    # El puerto 80 debe seguir libre hasta que acme.sh lo utilice.
+    if ! check_port_80; then
+        error "El puerto 80 dejó de estar disponible."
+        return 1
+    fi
+
+    acme_args=(
+        --issue
+        --server letsencrypt
+        --standalone
+        --httpport 80
+        --keylength ec-256
+        -d "$domain"
+    )
+
+    if [[ -n "$email" ]]; then
+        acme_args+=(--accountemail "$email")
+    fi
+
+    if ! "$ACME_BIN" "${acme_args[@]}"; then
+        error "Let's Encrypt no pudo emitir el certificado."
+        warning "Comprueba DNS, firewall, NAT y accesibilidad externa del puerto 80."
+        return 1
+    fi
+
+    acme_cert="$ACME_HOME/${domain}_ecc/${domain}.cer"
+    acme_key="$ACME_HOME/${domain}_ecc/${domain}.key"
+    acme_fullchain="$ACME_HOME/${domain}_ecc/fullchain.cer"
+
+    [[ -s "$acme_key" ]] || {
+        error "No se encontró la clave privada generada por ACME."
+        return 1
+    }
+
+    [[ -s "$acme_fullchain" ]] || {
+        error "No se encontró el certificado fullchain generado por ACME."
+        return 1
+    }
+
+    if ! validate_certificate "$acme_fullchain" "$acme_key" "$domain" "acme"; then
+        error "El certificado emitido no superó la validación."
+        return 1
+    fi
+
+    # Instalar primero el hook para futuras renovaciones.
+    if ! create_acme_reload_hook; then
+        error "No se pudo crear el hook de renovación."
+        return 1
+    fi
+
+    # Instalar el certificado en las rutas definitivas de HCR.
+    if ! install_certificate_pair "$acme_fullchain" "$acme_key" "$domain" "acme"; then
+        error "No se pudo instalar el certificado ACME en HCR."
+        return 1
+    fi
+
+    # Registrar los destinos de renovación persistente.
+    if ! "$ACME_BIN" --install-cert -d "$domain" --ecc \
+        --key-file "$KEY_FILE" \
+        --fullchain-file "$CERT_FILE" \
+        --reloadcmd "$ACME_RELOAD"; then
+        warning "No se pudo registrar la instalación automática de renovación."
+        warning "El certificado actual sí fue instalado; revisa acme.sh."
         return 1
     fi
 
@@ -1028,16 +1493,21 @@ create_self_signed() {
     chmod 600 "$KEY_FILE"
     chown root:root "$CERT_FILE" "$KEY_FILE"
 
+    if ! validate_certificate "$CERT_FILE" "$KEY_FILE" "$domain" "acme"; then
+        error "La copia final del certificado no superó la validación."
+        return 1
+    fi
+
     CERT_PATH="$CERT_FILE"
     KEY_PATH="$KEY_FILE"
-    EXPECTED_HOST="$hostname"
+    EXPECTED_HOST="$domain"
+    CERTIFICATE_TYPE="acme"
 
-    success "Certificado autofirmado creado correctamente."
+    success "Certificado Let's Encrypt instalado correctamente."
+    success "Renovación automática configurada."
     info "Certificado: $CERT_PATH"
     info "Clave privada: $KEY_PATH"
-
-    warning "Un certificado autofirmado no tendrá confianza pública automática."
-    warning "Los clientes deberán confiar expresamente en él."
+    info "Hook de renovación: $ACME_RELOAD"
 
     return 0
 }
@@ -1046,23 +1516,18 @@ create_self_signed() {
 #                 SELECCIONAR CERTIFICADO
 # ============================================================
 
-# Códigos de retorno:
-#   0 = certificado seleccionado correctamente.
-#   1 = error real.
-#   2 = usuario canceló y debe volver al menú principal.
+# Códigos:
+#   0 = certificado seleccionado o creado.
+#   1 = error.
+#   2 = usuario canceló.
 
 select_certificate() {
-    local entry
-    local cert
-    local key
-    local choice
-    local index
-    local total
-    local numeric_choice
+    local entry cert key choice index total numeric_choice cert_type
 
     EXPECTED_HOST=""
     CERT_PATH=""
     KEY_PATH=""
+    CERTIFICATE_TYPE=""
 
     if ! scan_certificates; then
         error "No se pudo completar la búsqueda."
@@ -1072,130 +1537,111 @@ select_certificate() {
     total="${#CERTIFICATES[@]}"
 
     # --------------------------------------------------------
-    # SIN CERTIFICADOS COMPATIBLES
+    # SI EXISTEN CERTIFICADOS COMPATIBLES, SOLO SE SELECCIONAN.
     # --------------------------------------------------------
 
-    if (( total == 0 )); then
+    if (( total > 0 )); then
+        printf '  %b◆%b  %bCERTIFICADOS DISPONIBLES%b\n\n' \
+            "$CYAN" "$RESET" "$WHITE$BOLD" "$RESET"
 
-        warning "No se encontraron certificados compatibles."
+        show_certificates
 
         printf '\n'
         edit_line
         printf '\n'
-    
-        printf '  %b[1]%b  Crear un certificado SSL\n' \
-            "$GREEN$BOLD" "$RESET"
-    
-        printf '\n'
-        edit_line
-        printf '\n'
-
-        printf '  %b[0]%b  Salir\n' \
-            "$RED$BOLD" "$RESET"
-
+        printf '  %b[0]%b  Salir\n' "$RED$BOLD" "$RESET"
         printf '\n'
         edit_line
         printf '\n'
 
         while true; do
-
-            if ! read_option \
-                "  ${CYAN}${BOLD}Selecciona una opción:${RESET} "; then
-                return 1
-            fi
-
+            read_option "  ${CYAN}${BOLD}Selecciona una opción:${RESET} " || return 1
             choice="$OPTION_VALUE"
 
-            case "$choice" in
-                1)
-                    create_self_signed
-                    return $?
-                    ;;
+            [[ "$choice" == "0" ]] && return 2
 
-                0)
-                    return 2
-                    ;;
+            if [[ ! "$choice" =~ ^[0-9]+$ ]]; then
+                invalid_option
+                continue
+            fi
 
-                *)
-                    invalid_option
-                    ;;
-            esac
+            numeric_choice="$choice"
+            numeric_choice="${numeric_choice#"${numeric_choice%%[!0]*}"}"
+            numeric_choice="${numeric_choice:-0}"
+
+            if (( numeric_choice < 1 || numeric_choice > total )); then
+                invalid_option
+                continue
+            fi
+
+            index=$((numeric_choice - 1))
+            entry="${CERTIFICATES[index]}"
+
+            cert="${entry%%|*}"
+            entry="${entry#*|}"
+            key="${entry%%|*}"
+            cert_type="${entry#*|}"
+
+            if ! validate_certificate "$cert" "$key" "$EXPECTED_HOST" "$cert_type"; then
+                error "El certificado ya no supera la validación."
+                wait_for_enter || return 1
+                continue
+            fi
+
+            CERT_PATH="$cert"
+            KEY_PATH="$key"
+            CERTIFICATE_TYPE="$cert_type"
+
+            return 0
         done
     fi
 
     # --------------------------------------------------------
-    # MOSTRAR TODOS LOS CERTIFICADOS DETECTADOS
+    # SIN CERTIFICADOS COMPATIBLES: ACME O AUTOFIRMADO.
     # --------------------------------------------------------
 
-    printf '  %b◆%b  %bCERTIFICADOS DISPONIBLES%b\n\n' \
-    "$CYAN" "$RESET" "$WHITE$BOLD" "$RESET"
+    warning "No se encontraron certificados compatibles."
 
-    show_certificates
-    
     printf '\n'
     edit_line
     printf '\n'
-    
+
+    printf '  %b[1]%b  Obtener certificado ACME HTTP-01\n' \
+        "$GREEN$BOLD" "$RESET"
+
+    printf '  %b[2]%b  Crear certificado autofirmado\n' \
+        "$CYAN$BOLD" "$RESET"
+
+    printf '\n'
+    edit_line
+    printf '\n'
+
     printf '  %b[0]%b  Salir\n' "$RED$BOLD" "$RESET"
 
     printf '\n'
     edit_line
     printf '\n'
 
-    # --------------------------------------------------------
-    # SELECCIÓN DINÁMICA
-    # --------------------------------------------------------
-
     while true; do
-
-        if ! read_option \
-            "  ${CYAN}${BOLD}Selecciona una opción:${RESET} "; then
-            return 1
-        fi
-
+        read_option "  ${CYAN}${BOLD}Selecciona una opción:${RESET} " || return 1
         choice="$OPTION_VALUE"
 
-        if [[ "$choice" == "0" ]]; then
-            return 2
-        fi
-
-        if [[ ! "$choice" =~ ^[0-9]+$ ]]; then
-            invalid_option
-            continue
-        fi
-
-        numeric_choice="$choice"
-        numeric_choice="${numeric_choice#"${numeric_choice%%[!0]*}"}"
-        numeric_choice="${numeric_choice:-0}"
-
-        if [[ "$numeric_choice" == "0" ]] ||
-           (( ${#numeric_choice} > ${#total} )) ||
-           {
-               (( ${#numeric_choice} == ${#total} )) &&
-               [[ "$numeric_choice" > "$total" ]]
-           } ||
-           (( numeric_choice < 1 || numeric_choice > total )); then
-
-            invalid_option
-            continue
-        fi
-
-        index=$((numeric_choice - 1))
-        entry="${CERTIFICATES[index]}"
-
-        cert="${entry%%|*}"
-        key="${entry#*|}"
-
-        if ! validate_certificate "$cert" "$key" "$EXPECTED_HOST"; then
-            error "El certificado ya no supera la validación."
-            wait_for_enter || return 1
-            continue
-        fi
-
-        CERT_PATH="$cert"
-        KEY_PATH="$key"
-
-        return 0
+        case "$choice" in
+            1)
+                acme_http01
+                return $?
+                ;;
+            2)
+                create_self_signed
+                return $?
+                ;;
+            0)
+                return 2
+                ;;
+            *)
+                invalid_option
+                ;;
+        esac
     done
 }
 
@@ -1221,7 +1667,6 @@ check_hcr_tls_support() {
     fi
 
     if [[ "$mode" == "tls" || "$mode" == "auto" ]]; then
-
         if ! grep -Eq '^[[:space:]]+-{1,2}tls-cert([=[:space:]]|$)' <<<"$help_output"; then
             error "El binario no anuncia el parámetro tls-cert."
             return 1
@@ -1244,11 +1689,8 @@ prepare_backup() {
     local timestamp
 
     install -d -o root -g root -m 700 "$BACKUP_BASE"
-
     timestamp="$(date '+%Y%m%d-%H%M%S')"
-
     BACKUP_DIR="$(mktemp -d "$BACKUP_BASE/tls-$timestamp-XXXXXXXX")"
-
     chmod 700 "$BACKUP_DIR"
 }
 
@@ -1278,8 +1720,7 @@ cleanup_backup() {
 }
 
 validate_tls_paths() {
-    local cert="$1"
-    local key="$2"
+    local cert="$1" key="$2"
 
     [[ "$cert" == /* && "$key" == /* ]] || return 1
     [[ "$cert" =~ ^/[A-Za-z0-9_./+-]+$ ]] || return 1
@@ -1296,9 +1737,7 @@ modify_services() {
     local mode="$1"
     local cert="${2:-}"
     local key="${3:-}"
-
-    local file
-    local temp_file
+    local file temp_file
 
     if [[ "$mode" == "tls" || "$mode" == "auto" ]]; then
         validate_tls_paths "$cert" "$key" || {
@@ -1308,15 +1747,9 @@ modify_services() {
     fi
 
     for file in "${SERVICES[@]}"; do
-
         temp_file="$(mktemp)" || return 1
 
-        if ! python3 - \
-            "$file" \
-            "$temp_file" \
-            "$mode" \
-            "$cert" \
-            "$key" <<'PY'
+        if ! python3 - "$file" "$temp_file" "$mode" "$cert" "$key" <<'PY'
 import re
 import sys
 
@@ -1328,11 +1761,9 @@ with open(source, encoding="utf-8") as f:
 transport_pattern = re.compile(
     r'(?<!\S)-{1,2}transport(?:=|\s+)(?:"[^"]*"|\'[^\']*\'|[^\s]+)'
 )
-
 cert_pattern = re.compile(
     r'(?<!\S)-{1,2}tls-cert(?:=|\s+)(?:"[^"]*"|\'[^\']*\'|[^\s]+)'
 )
-
 key_pattern = re.compile(
     r'(?<!\S)-{1,2}tls-key(?:=|\s+)(?:"[^"]*"|\'[^\']*\'|[^\s]+)'
 )
@@ -1341,13 +1772,11 @@ updated = []
 exec_count = 0
 
 for line in lines:
-
     if not re.match(r'^\s*ExecStart\s*=', line):
         updated.append(line)
         continue
 
     exec_count += 1
-
     if exec_count != 1:
         sys.exit(1)
 
@@ -1355,37 +1784,24 @@ for line in lines:
     cert_matches = list(cert_pattern.finditer(line))
     key_matches = list(key_pattern.finditer(line))
 
-    if len(transport_matches) > 1:
-        sys.exit(1)
-
-    if len(cert_matches) > 1:
-        sys.exit(1)
-
-    if len(key_matches) > 1:
+    if len(transport_matches) > 1 or len(cert_matches) > 1 or len(key_matches) > 1:
         sys.exit(1)
 
     line = cert_pattern.sub('', line)
     line = key_pattern.sub('', line)
 
     if transport_matches:
-        line = transport_pattern.sub(
-            '--transport=' + mode,
-            line,
-            count=1
-        )
+        line = transport_pattern.sub('--transport=' + mode, line, count=1)
     else:
-        line = line.rstrip('\n')
-        line += ' --transport=' + mode + '\n'
+        line = line.rstrip('\n') + ' --transport=' + mode + '\n'
 
     if mode in ('tls', 'auto'):
-
         if not cert or not key:
             sys.exit(1)
 
         line = line.rstrip('\n')
         line += ' --tls-cert=' + cert
-        line += ' --tls-key=' + key
-        line += '\n'
+        line += ' --tls-key=' + key + '\n'
 
     updated.append(line)
 
@@ -1416,8 +1832,7 @@ reload_systemd() {
 }
 
 restart_services() {
-    local file
-    local failed=0
+    local file failed=0
 
     for file in "${SERVICES[@]}"; do
         if ! systemctl restart "$(basename "$file")" >/dev/null 2>&1; then
@@ -1429,8 +1844,7 @@ restart_services() {
 }
 
 verify_services() {
-    local file
-    local failed=0
+    local file failed=0
 
     for file in "${SERVICES[@]}"; do
         if ! systemctl is-active --quiet "$(basename "$file")"; then
@@ -1446,23 +1860,14 @@ verify_services() {
 # ============================================================
 
 verify_configuration() {
-    local file
-    local unit
-    local transport
-    local loaded_transport
-    local cert
-    local key
-    local loaded_cert
-    local loaded_key
+    local file unit transport loaded_transport
+    local cert key loaded_cert loaded_key
 
     for file in "${SERVICES[@]}"; do
-
         unit="$(basename "$file")"
 
         transport="$(get_argument "$file" "transport")" || return 1
-
-        loaded_transport="$(get_loaded_argument "$unit" "transport")" ||
-            return 1
+        loaded_transport="$(get_loaded_argument "$unit" "transport")" || return 1
 
         [[ "$transport" == "$SELECTED_MODE" ]] || return 1
         [[ "$loaded_transport" == "$SELECTED_MODE" ]] || return 1
@@ -1470,37 +1875,18 @@ verify_configuration() {
         systemctl is-active --quiet "$unit" || return 1
 
         if [[ "$SELECTED_MODE" == "plain" ]]; then
-
-            if get_argument "$file" "tls-cert" >/dev/null 2>&1; then
-                return 1
-            fi
-
-            if get_argument "$file" "tls-key" >/dev/null 2>&1; then
-                return 1
-            fi
-
-            if get_loaded_argument "$unit" "tls-cert" >/dev/null 2>&1; then
-                return 1
-            fi
-
-            if get_loaded_argument "$unit" "tls-key" >/dev/null 2>&1; then
-                return 1
-            fi
-
+            get_argument "$file" "tls-cert" >/dev/null 2>&1 && return 1
+            get_argument "$file" "tls-key" >/dev/null 2>&1 && return 1
+            get_loaded_argument "$unit" "tls-cert" >/dev/null 2>&1 && return 1
+            get_loaded_argument "$unit" "tls-key" >/dev/null 2>&1 && return 1
         else
-
             cert="$(get_argument "$file" "tls-cert")" || return 1
             key="$(get_argument "$file" "tls-key")" || return 1
-
-            loaded_cert="$(get_loaded_argument "$unit" "tls-cert")" ||
-                return 1
-
-            loaded_key="$(get_loaded_argument "$unit" "tls-key")" ||
-                return 1
+            loaded_cert="$(get_loaded_argument "$unit" "tls-cert")" || return 1
+            loaded_key="$(get_loaded_argument "$unit" "tls-key")" || return 1
 
             [[ "$cert" == "$CERT_PATH" ]] || return 1
             [[ "$key" == "$KEY_PATH" ]] || return 1
-
             [[ "$loaded_cert" == "$CERT_PATH" ]] || return 1
             [[ "$loaded_key" == "$KEY_PATH" ]] || return 1
         fi
@@ -1514,14 +1900,11 @@ verify_configuration() {
 # ============================================================
 
 rollback() {
-    local file
-    local backup_file
-    local failed=0
+    local file backup_file failed=0
 
     warning "Restaurando la configuración original..."
 
     for file in "${SERVICES[@]}"; do
-
         backup_file="$BACKUP_DIR/$(basename "$file")"
 
         if [[ ! -f "$backup_file" ]]; then
@@ -1529,9 +1912,7 @@ rollback() {
             continue
         fi
 
-        if ! cp -a "$backup_file" "$file"; then
-            failed=1
-        fi
+        cp -a "$backup_file" "$file" || failed=1
     done
 
     if (( failed )); then
@@ -1559,7 +1940,6 @@ rollback() {
     fi
 
     success "Configuración original restaurada."
-
     return 0
 }
 
@@ -1577,7 +1957,13 @@ apply_configuration() {
     SELECTED_MODE="$mode"
 
     if [[ "$mode" == "tls" || "$mode" == "auto" ]]; then
-        if ! validate_certificate "$CERT_PATH" "$KEY_PATH" "$EXPECTED_HOST"; then
+        # Se conserva el tipo de certificado seleccionado.
+        if ! validate_certificate \
+            "$CERT_PATH" \
+            "$KEY_PATH" \
+            "$EXPECTED_HOST" \
+            "${CERTIFICATE_TYPE:-acme}"; then
+
             error "Certificado o clave privada no válidos."
             return 1
         fi
@@ -1588,22 +1974,14 @@ apply_configuration() {
         return 1
     fi
 
-    # Se conserva visible la lista de certificados elegida.
-
     printf '\n'
     edit_line
     section "APLICANDO CONFIGURACIÓN"
 
     case "$mode" in
-        tls)
-            info "Transporte seleccionado: TLS"
-            ;;
-        auto)
-            info "Transporte seleccionado: AUTO"
-            ;;
-        plain)
-            info "Transporte seleccionado: PLAIN"
-            ;;
+        tls) info "Transporte seleccionado: TLS" ;;
+        auto) info "Transporte seleccionado: AUTO" ;;
+        plain) info "Transporte seleccionado: PLAIN" ;;
     esac
 
     if [[ "$mode" != "plain" ]]; then
@@ -1627,8 +2005,7 @@ apply_configuration() {
     fi
 
     if ! spinner "Modificando configuración TLS de HCR" \
-        modify_services "$mode" "$CERT_PATH" "$KEY_PATH"
-    then
+        modify_services "$mode" "$CERT_PATH" "$KEY_PATH"; then
         error "No se pudieron modificar todos los servicios."
         rollback || true
         return 1
@@ -1717,34 +2094,20 @@ apply_configuration() {
 # ============================================================
 
 get_verified_global_mode() {
-    local file
-    local unit
-    local transport
-    local loaded_transport
-    local cert
-    local key
-    local loaded_cert
-    local loaded_key
-    local first_mode=""
-    local initialized=0
+    local file unit transport loaded_transport
+    local cert key loaded_cert loaded_key
+    local first_mode="" initialized=0
 
     for file in "${SERVICES[@]}"; do
-
         unit="$(basename "$file")"
         transport="$(get_transport "$file")"
 
         case "$transport" in
-            tls|auto|plain)
-                ;;
-            *)
-                printf 'unknown'
-                return 0
-                ;;
+            tls|auto|plain) ;;
+            *) printf 'unknown'; return 0 ;;
         esac
 
-        loaded_transport="$(
-            get_loaded_argument "$unit" "transport" 2>/dev/null
-        )" || {
+        loaded_transport="$(get_loaded_argument "$unit" "transport" 2>/dev/null)" || {
             printf 'unknown'
             return 0
         }
@@ -1768,29 +2131,26 @@ get_verified_global_mode() {
         fi
 
         if [[ "$transport" == "plain" ]]; then
-
-            if get_argument "$file" "tls-cert" >/dev/null 2>&1; then
+            get_argument "$file" "tls-cert" >/dev/null 2>&1 && {
                 printf 'unknown'
                 return 0
-            fi
+            }
 
-            if get_argument "$file" "tls-key" >/dev/null 2>&1; then
+            get_argument "$file" "tls-key" >/dev/null 2>&1 && {
                 printf 'unknown'
                 return 0
-            fi
+            }
 
-            if get_loaded_argument "$unit" "tls-cert" >/dev/null 2>&1; then
+            get_loaded_argument "$unit" "tls-cert" >/dev/null 2>&1 && {
                 printf 'unknown'
                 return 0
-            fi
+            }
 
-            if get_loaded_argument "$unit" "tls-key" >/dev/null 2>&1; then
+            get_loaded_argument "$unit" "tls-key" >/dev/null 2>&1 && {
                 printf 'unknown'
                 return 0
-            fi
-
+            }
         else
-
             cert="$(get_argument "$file" "tls-cert" 2>/dev/null)" || {
                 printf 'unknown'
                 return 0
@@ -1801,16 +2161,12 @@ get_verified_global_mode() {
                 return 0
             }
 
-            loaded_cert="$(
-                get_loaded_argument "$unit" "tls-cert" 2>/dev/null
-            )" || {
+            loaded_cert="$(get_loaded_argument "$unit" "tls-cert" 2>/dev/null)" || {
                 printf 'unknown'
                 return 0
             }
 
-            loaded_key="$(
-                get_loaded_argument "$unit" "tls-key" 2>/dev/null
-            )" || {
+            loaded_key="$(get_loaded_argument "$unit" "tls-key" 2>/dev/null)" || {
                 printf 'unknown'
                 return 0
             }
@@ -1863,14 +2219,11 @@ show_option_state() {
 # ============================================================
 
 disable_tls_silently() {
-    local file
-    local backup_file
-    local failed=0
+    local file backup_file failed=0
 
     SELECTED_MODE="plain"
 
     check_hcr_tls_support plain >/dev/null 2>&1 || return 1
-
     prepare_backup >/dev/null 2>&1 || return 1
 
     if ! create_backup >/dev/null 2>&1; then
@@ -1883,71 +2236,36 @@ disable_tls_silently() {
     fi
 
     if (( failed == 0 )); then
-        if ! reload_systemd >/dev/null 2>&1; then
-            failed=1
-        fi
+        reload_systemd >/dev/null 2>&1 || failed=1
     fi
 
     if (( failed == 0 )); then
-        if ! restart_services >/dev/null 2>&1; then
-            failed=1
-        fi
+        restart_services >/dev/null 2>&1 || failed=1
     fi
 
     if (( failed == 0 )); then
-        if ! verify_services >/dev/null 2>&1; then
-            failed=1
-        fi
+        verify_services >/dev/null 2>&1 || failed=1
     fi
 
     if (( failed == 0 )); then
-        if ! verify_configuration >/dev/null 2>&1; then
-            failed=1
-        fi
+        verify_configuration >/dev/null 2>&1 || failed=1
     fi
 
-    if (( failed == 0 )); then
-        if [[ "$(get_verified_global_mode)" != "plain" ]]; then
-            failed=1
-        fi
-    fi
-
-    if (( failed == 0 )); then
+    if (( failed == 0 )) && [[ "$(get_verified_global_mode)" == "plain" ]]; then
         cleanup_backup >/dev/null 2>&1 || true
         return 0
     fi
 
-    # -------------------- ROLLBACK SILENCIOSO ---------------
-
     for file in "${SERVICES[@]}"; do
-
         backup_file="$BACKUP_DIR/$(basename "$file")"
 
-        if [[ ! -f "$backup_file" ]]; then
-            failed=2
-            continue
-        fi
-
-        if ! cp -a "$backup_file" "$file" >/dev/null 2>&1; then
-            failed=2
-        fi
+        [[ -f "$backup_file" ]] || return 1
+        cp -a "$backup_file" "$file" >/dev/null 2>&1 || return 1
     done
 
-    if (( failed == 2 )); then
-        return 1
-    fi
-
-    if ! systemctl daemon-reload >/dev/null 2>&1; then
-        return 1
-    fi
-
-    if ! restart_services >/dev/null 2>&1; then
-        return 1
-    fi
-
-    if ! verify_services >/dev/null 2>&1; then
-        return 1
-    fi
+    systemctl daemon-reload >/dev/null 2>&1 || return 1
+    restart_services >/dev/null 2>&1 || return 1
+    verify_services >/dev/null 2>&1 || return 1
 
     cleanup_backup >/dev/null 2>&1 || true
 
@@ -1958,18 +2276,12 @@ disable_tls_silently() {
 #                 ACTIVAR MODALIDAD TLS / AUTO
 # ============================================================
 
-# Códigos:
-#   0 = operación completada.
-#   1 = error.
-#   2 = cancelación del usuario.
-
 toggle_tls_mode() {
     local mode="$1"
     local label="$2"
     local status=0
 
     MODE_LABEL="$label"
-
     edit_header
 
     if select_certificate; then
@@ -1988,12 +2300,10 @@ toggle_tls_mode() {
 
 show_menu() {
     header
-
     show_services
 
     printf '\n'
     line
-
     section "ADMINISTRACIÓN SSL / TLS"
 
     printf '  %b[1]%b  Modo solo TLS/SSL' "$GREEN$BOLD" "$RESET"
@@ -2008,9 +2318,7 @@ show_menu() {
 
     line
     printf '\n'
-
     printf '  %b[0]%b  Salir\n' "$RED$BOLD" "$RESET"
-
     printf '\n'
     line
     printf '\n'
@@ -2021,9 +2329,7 @@ show_menu() {
 # ============================================================
 
 main() {
-    local option
-    local current_mode
-    local status
+    local option current_mode status
 
     if (( EUID != 0 )); then
         printf '%b✗%b  Ejecuta este administrador como root.\n' "$RED" "$RESET"
@@ -2039,7 +2345,6 @@ main() {
     fi
 
     while true; do
-
         if ! detect_services; then
             error "No se pudieron detectar los servicios HCR."
             break
@@ -2048,9 +2353,7 @@ main() {
         show_menu
 
         while true; do
-
-            if ! read_option \
-                "  ${CYAN}${BOLD}Selecciona una opción:${RESET} "; then
+            if ! read_option "  ${CYAN}${BOLD}Selecciona una opción:${RESET} "; then
                 printf '\n'
                 return 0
             fi
@@ -2058,17 +2361,14 @@ main() {
             option="$OPTION_VALUE"
 
             case "$option" in
-
                 1)
                     current_mode="$(get_verified_global_mode)"
 
                     if [[ "$current_mode" == "tls" ]]; then
-
                         if ! disable_tls_silently; then
                             error "No se pudo desactivar TLS. Revisa los servicios y el respaldo."
                             wait_for_enter || return 0
                         fi
-
                         break
                     fi
 
@@ -2084,7 +2384,6 @@ main() {
                             wait_for_enter || return 0
                         fi
                     fi
-
                     break
                     ;;
 
@@ -2092,12 +2391,10 @@ main() {
                     current_mode="$(get_verified_global_mode)"
 
                     if [[ "$current_mode" == "auto" ]]; then
-
                         if ! disable_tls_silently; then
                             error "No se pudo desactivar AUTO. Revisa los servicios y el respaldo."
                             wait_for_enter || return 0
                         fi
-
                         break
                     fi
 
@@ -2113,14 +2410,10 @@ main() {
                             wait_for_enter || return 0
                         fi
                     fi
-
                     break
                     ;;
 
                 0)
-                    printf '\n'
-                    success "Saliendo del administrador SSL/TLS."
-                    printf '\n'
                     return 0
                     ;;
 
