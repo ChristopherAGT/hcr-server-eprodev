@@ -21,7 +21,6 @@ umask 077
 #   - Espera del listener después del inicio.
 #   - Resumen detallado de estados y totales.
 #   - Spinner animado.
-#   - Diagnóstico de errores de instalación.
 #   - Consultas reciclables sin duplicar líneas.
 #
 # ============================================================
@@ -154,7 +153,7 @@ header() {
     line
 }
 
-# -------------------- SPINNER -------------------------------
+# -------------------- SPINNER --------------------------------
 
 spinner() {
     local message="$1"
@@ -164,23 +163,26 @@ spinner() {
     local pid
     local status=0
     local i=0
-    local log_file
-    local log_line
+    local temp_dir
+    local output_file
+    local status_file
+    local output_line
 
-    log_file="$(mktemp)" || {
-        error "No se pudo crear el registro temporal."
-        return 1
-    }
+    temp_dir="$(mktemp -d)" || return 1
+    output_file="$temp_dir/output"
+    status_file="$temp_dir/status"
 
     (
-        set +m
-        "$@" >"$log_file" 2>&1
+        set +e
+        "$@" >"$output_file" 2>&1
+        status=$?
+        printf '%s\n' "$status" >"$status_file"
+        exit "$status"
     ) &
 
     pid=$!
 
-    while kill -0 "$pid" 2>/dev/null; do
-
+    while [[ ! -f "$status_file" ]] && kill -0 "$pid" 2>/dev/null; do
         printf '\r\033[2K  %b%s%b  %b%s%b' \
             "$CYAN$BOLD" "${frames[i]}" "$RESET" \
             "$WHITE" "$message" "$RESET"
@@ -191,43 +193,28 @@ spinner() {
 
     wait "$pid" || status=$?
 
-    if (( status == 0 )); then
+    if [[ -f "$status_file" ]]; then
+        read -r status < "$status_file"
+    fi
 
+    if (( status == 0 )); then
         printf '\r\033[2K  %b✓%b  %b%s%b\n' \
             "$GREEN$BOLD" "$RESET" "$WHITE" "$message" "$RESET"
-
     else
-
         printf '\r\033[2K  %b✗%b  %b%s%b\n' \
             "$RED$BOLD" "$RESET" "$RED" "$message" "$RESET"
 
-        printf '\n'
-        line
+        if [[ -s "$output_file" ]]; then
+            printf '\n'
 
-        error "DIAGNÓSTICO DE LA OPERACIÓN"
-
-        if [[ -s "$log_file" ]]; then
-
-            while IFS= read -r log_line || [[ -n "$log_line" ]]; do
-
+            while IFS= read -r output_line || [[ -n "$output_line" ]]; do
                 printf '  %b›%b  %s\n' \
-                    "$YELLOW" "$RESET" "$log_line"
-
-            done < "$log_file"
-
-        else
-
-            warning "El proceso terminó sin proporcionar información adicional."
-
+                    "$YELLOW" "$RESET" "$output_line"
+            done < "$output_file"
         fi
-
-        printf '\n'
-        line
-        printf '\n'
-
     fi
 
-    rm -f -- "$log_file"
+    rm -rf "$temp_dir"
 
     return "$status"
 }
@@ -281,12 +268,10 @@ check_requirements() {
     local command
 
     for command in systemctl python3 awk sort mktemp ss find ln; do
-
         if ! command -v "$command" >/dev/null 2>&1; then
             error "Falta una dependencia: $command"
             return 1
         fi
-
     done
 
     return 0
@@ -738,6 +723,7 @@ prepare_arguments() {
         return 1
     fi
 
+    # El transporte PLAIN no debe heredar rutas TLS.
     if [[ "$SOURCE_TRANSPORT" == "plain" ]]; then
         if ! remove_tls_arguments; then
             return 1
@@ -1281,10 +1267,17 @@ create_service() {
         return 1
     fi
 
-    if ! working_directory="$(
-        systemd_quote_arguments "$SOURCE_WORKDIR"
-    )"; then
-        error "No se pudo preparar el directorio de trabajo."
+    # WorkingDirectory NO debe pasar por systemd_quote_arguments.
+    # Esa función está diseñada exclusivamente para ExecStart.
+    working_directory="$SOURCE_WORKDIR"
+
+    if [[ "$working_directory" != /* ]]; then
+        error "El directorio de trabajo no es una ruta absoluta: $working_directory"
+        return 1
+    fi
+
+    if [[ ! -d "$working_directory" ]]; then
+        error "El directorio de trabajo no existe: $working_directory"
         return 1
     fi
 
@@ -1343,21 +1336,15 @@ EOF
 rollback_created_services() {
     local unit
 
-    warning "Iniciando restauración de los servicios creados."
-
     for unit in "${CREATED_SERVICES[@]}"; do
 
         systemctl disable --now "$unit" >/dev/null 2>&1 || true
 
-        if [[ -e "$SERVICE_DIR/$unit" || -L "$SERVICE_DIR/$unit" ]]; then
-            rm -f -- "$SERVICE_DIR/$unit"
-        fi
+        rm -f -- "$SERVICE_DIR/$unit"
 
     done
 
     systemctl daemon-reload >/dev/null 2>&1 || true
-
-    CREATED_SERVICES=()
 }
 
 # ============================================================
@@ -1370,69 +1357,35 @@ install_services() {
 
     CREATED_SERVICES=()
 
-    # --------------------------------------------------------
-    # CREACIÓN DE UNIDADES
-    # --------------------------------------------------------
-
     for port in "${PORTS[@]}"; do
 
         if ! create_service "$port"; then
-
-            error "Falló la creación de la unidad del puerto $port."
-
             rollback_created_services
             return 1
         fi
 
     done
 
-    # --------------------------------------------------------
-    # RECARGA DE SYSTEMD
-    # --------------------------------------------------------
-
     if ! systemctl daemon-reload; then
-
-        error "No se pudo recargar el administrador systemd."
-
+        error "No se pudo actualizar la configuración de systemd."
         rollback_created_services
         return 1
     fi
-
-    # --------------------------------------------------------
-    # HABILITACIÓN E INICIO
-    # --------------------------------------------------------
 
     for port in "${PORTS[@]}"; do
 
         unit="${SERVICE_PREFIX}-${port}.service"
 
-        if ! systemctl enable --now "$unit"; then
-
+        if ! systemctl enable --now "$unit" >/dev/null 2>&1; then
             error "No se pudo habilitar o iniciar $unit."
 
             printf '\n'
-
-            warning "ESTADO DEL SERVICIO"
-
-            systemctl status \
-                "$unit" \
-                --no-pager \
-                --full || true
+            systemctl status "$unit" --no-pager --full 2>&1 || true
 
             if command -v journalctl >/dev/null 2>&1; then
-
                 printf '\n'
-                warning "ÚLTIMOS REGISTROS DEL SERVICIO"
-
-                journalctl \
-                    -u "$unit" \
-                    -n 25 \
-                    --no-pager \
-                    -o short-iso || true
-
+                journalctl -u "$unit" -n 20 --no-pager 2>&1 || true
             fi
-
-            printf '\n'
 
             rollback_created_services
             return 1
@@ -1777,14 +1730,12 @@ show_summary() {
 
     if (( open_count == total_count )); then
         message="APERTURA DE PUERTOS COMPLETADA"
-
         printf '%*s%b%s%b\n' \
             "$(( (width - ${#message}) / 2 ))" '' \
             "$GREEN$BOLD" "$message" "$RESET"
 
     else
         message="APERTURA DE PUERTOS CON OBSERVACIONES"
-
         printf '%*s%b%s%b\n' \
             "$(( (width - ${#message}) / 2 ))" '' \
             "$YELLOW$BOLD" "$message" "$RESET"
