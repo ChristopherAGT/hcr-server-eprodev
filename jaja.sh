@@ -694,6 +694,11 @@ prepare_arguments() {
                     return 1
                 fi
 
+                # CORRECCIÓN:
+                # Se conserva --listen en su posición original.
+                # El valor se sustituirá al crear cada servicio.
+                NEW_EXEC_ARGS+=( "$arg" "$listen_value" )
+
                 i=$((i + 2))
                 continue
                 ;;
@@ -707,6 +712,9 @@ prepare_arguments() {
                     error "El argumento --listen no tiene un valor."
                     return 1
                 fi
+
+                # Se conserva también el formato --listen=valor.
+                NEW_EXEC_ARGS+=( "$arg" )
 
                 i=$((i + 1))
                 continue
@@ -1219,11 +1227,21 @@ wait_for_port() {
 
 systemd_quote_arguments() {
     python3 -c '
+import re
 import sys
 
 args = sys.argv[1:]
 
+# Los argumentos simples se mantienen sin comillas.
+# Los argumentos especiales se protegen para systemd.
+
+SAFE_ARGUMENT = re.compile(r"^[A-Za-z0-9_./:@+=,-]+$")
+
 def quote(value):
+
+    if SAFE_ARGUMENT.fullmatch(value):
+        return value
+
     value = value.replace("\\", "\\\\")
     value = value.replace("\"", "\\\"")
     value = value.replace("%", "%%")
@@ -1234,6 +1252,78 @@ def quote(value):
 
 print(" ".join(quote(arg) for arg in args))
 ' "$@"
+}
+
+# ============================================================
+#               PREPARAR ARGUMENTOS PARA CADA PUERTO
+# ============================================================
+
+build_port_arguments() {
+    local port="$1"
+    local i=1
+    local arg
+    local value
+    local listen_count=0
+
+    local -a final_args=()
+
+    final_args+=( "${NEW_EXEC_ARGS[0]}" )
+
+    while (( i < ${#NEW_EXEC_ARGS[@]} )); do
+
+        arg="${NEW_EXEC_ARGS[$i]}"
+
+        case "$arg" in
+
+            --listen)
+
+                if (( i + 1 >= ${#NEW_EXEC_ARGS[@]} )); then
+                    error "El argumento --listen no tiene un valor."
+                    return 1
+                fi
+
+                value="${NEW_EXEC_ARGS[$((i + 1))]}"
+
+                if [[ -z "$value" || "$value" == --* ]]; then
+                    error "El valor de --listen no es válido."
+                    return 1
+                fi
+
+                listen_count=$((listen_count + 1))
+
+                # Sustituye el valor en su posición original.
+                final_args+=( "--listen" ":$port" )
+
+                i=$((i + 2))
+                continue
+                ;;
+
+            --listen=*)
+
+                listen_count=$((listen_count + 1))
+
+                # Conserva la modalidad --listen=valor.
+                final_args+=( "--listen=:$port" )
+
+                i=$((i + 1))
+                continue
+                ;;
+
+        esac
+
+        final_args+=( "$arg" )
+        i=$((i + 1))
+    done
+
+    if (( listen_count != 1 )); then
+        error "No se pudo conservar la posición original de --listen."
+        return 1
+    fi
+
+    # Devuelve los argumentos mediante un array global.
+    PORT_EXEC_ARGS=( "${final_args[@]}" )
+
+    return 0
 }
 
 # ============================================================
@@ -1249,7 +1339,7 @@ create_service() {
     local exec_line
     local working_directory
 
-    local -a final_args=()
+    local -a PORT_EXEC_ARGS=()
 
     # Evitar sobrescribir unidades existentes.
     if service_file_exists "$port"; then
@@ -1257,18 +1347,21 @@ create_service() {
         return 1
     fi
 
-    final_args=( "${NEW_EXEC_ARGS[@]}" )
-    final_args+=( "--listen" ":$port" )
+    # Construir los argumentos respetando el orden original.
+    if ! build_port_arguments "$port"; then
+        return 1
+    fi
 
+    # Recuperar el array preparado por build_port_arguments.
+    # La función anterior utiliza el array global PORT_EXEC_ARGS.
     if ! exec_line="$(
-        systemd_quote_arguments "${final_args[@]}"
+        systemd_quote_arguments "${PORT_EXEC_ARGS[@]}"
     )"; then
         error "No se pudieron preparar los argumentos de $unit."
         return 1
     fi
 
-    # WorkingDirectory NO debe pasar por systemd_quote_arguments.
-    # Esa función está diseñada exclusivamente para ExecStart.
+    # WorkingDirectory no pasa por el escape de ExecStart.
     working_directory="$SOURCE_WORKDIR"
 
     if [[ "$working_directory" != /* ]]; then
