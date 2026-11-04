@@ -143,7 +143,7 @@ header() {
     line
     printf '\n'
 
-    printf '  %b●%b  %bMODO MAESTRO%b\n' \
+    printf '  %b●%b  %bREUTILIZACIÓN DE PARÁMETROS HCR%b\n' \
         "$GREEN" "$RESET" "$WHITE$BOLD" "$RESET"
 
     printf '  %b●%b  %bSCRIPT BY. ChristopherAGT%b\n' \
@@ -1560,14 +1560,14 @@ show_configuration() {
 
         tls)
             transport_label="TLS"
-            tls_status="CONFIGURADO"
+            tls_status="ABIERTO"
             ;;
 
         auto)
             transport_label="AUTO"
 
             if [[ -n "$cert" && -n "$key" ]]; then
-                tls_status="CONFIGURADO"
+                tls_status="ABIERTO"
             else
                 tls_status="SIN CERTIFICADOS"
             fi
