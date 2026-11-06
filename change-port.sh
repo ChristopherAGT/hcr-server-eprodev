@@ -232,9 +232,9 @@ show_cancellation() {
     local message="MODIFICACIÓN CANCELADA"
     local width=58
     local padding
-
-    printf '\r\033[2K\n'
-    line
+    
+    line?
+    printf '\n'
 
     padding=$(( (width - ${#message}) / 2 ))
 
@@ -242,6 +242,7 @@ show_cancellation() {
         "$padding" '' \
         "$YELLOW$BOLD" "$message" "$RESET"
 
+    printf '\n'
     line
     printf '\n'
 }
@@ -584,10 +585,10 @@ show_current_information() {
 
     section "CONFIGURACIÓN ACTUAL"
 
-    printf '  %bTotal de servicios:%b   %b%s%b\n' \
+    printf '  %bTotal de servicios:%b %b%s%b\n' \
         "$GRAY" "$RESET" "$WHITE$BOLD" "${#SERVICES[@]}" "$RESET"
 
-    printf '  %bPuerto actual:%b        %b%s%b\n' \
+    printf '  %bPuerto actual:%b      %b%s%b\n' \
         "$GRAY" "$RESET" "$CYAN$BOLD" "$CURRENT_PORT" "$RESET"
 
     printf '\n'
@@ -837,13 +838,13 @@ show_summary() {
     line
     printf '\n'
 
-    printf '  %bPuerto anterior:%b      %b%s%b\n' \
+    printf '  %bPuerto anterior:%b        %b%s%b\n' \
         "$GRAY" "$RESET" "$WHITE$BOLD" "$CURRENT_PORT" "$RESET"
 
-    printf '  %bNuevo puerto:%b         %b%s%b\n' \
+    printf '  %bNuevo puerto:%b           %b%s%b\n' \
         "$GRAY" "$RESET" "$CYAN$BOLD" "$NEW_PORT" "$RESET"
 
-    printf '  %bTotal de servicios:%b   %b%s%b\n' \
+    printf '  %bTotal de servicios:%b     %b%s%b\n' \
         "$GRAY" "$RESET" "$WHITE$BOLD" "$total" "$RESET"
 
     printf '  %bServicios actualizados:%b %b%s%b\n' \
@@ -901,7 +902,7 @@ main() {
     if ! discover_services; then
 
         if (( ${#SERVICES[@]} == 0 )); then
-            error "No se encontraron servicios HCR multipuerto."
+            error "No se encontraron servicios HCR."
         fi
 
         exit 0
@@ -942,7 +943,11 @@ main() {
     # --------------------------------------------------------
     # APLICAR MODIFICACIONES
     # --------------------------------------------------------
-
+    
+    printf '\n'
+    line
+    printf '\n'
+    
     if ! spinner "Actualizando servicios HCR" apply_changes; then
 
         error "No se pudo completar la modificación."
