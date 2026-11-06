@@ -233,7 +233,8 @@ show_cancellation() {
     local width=58
     local padding
     
-    line?
+    printf '\n'
+    line
     printf '\n'
 
     padding=$(( (width - ${#message}) / 2 ))
